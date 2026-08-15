@@ -1,5 +1,11 @@
 # Vela
 
+**Vela** 发音 `/ˈvɛlə/`，拉丁语意为「帆」，也是南天星座 **船帆座** 的名字。
+
+帆本身不产生动力，它只是顺应风力——看似无为，却能让整艘船乘风破浪、高速前行。这正是 Vela 的隐喻：**AI 是你的风，Vela 是你的帆**。它不替你做决定，只是让 AI 驱动的任务井井有条，帮你一个人像一支队伍一样运转。
+
+——
+
 单 Operator 的 AI Agent 项目管理面板，作为 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) 插件运行。像管理同事一样为 Agent 派活、追踪进度、验收产出。
 
 > Board UI 的设计与部分实现移植自 [Multica](https://github.com/multica-ai/multica)。**Powered by Multica** — 依据 Multica License 条件 (b)，界面保留 Multica 署名。
