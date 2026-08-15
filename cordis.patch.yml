@@ -1,0 +1,9 @@
+# Vela bundle：向组合挂载 Vela 的 host half。
+# client half 经 package.json 的 dsh.client 声明被发现，不需要单独的行。
+- insert:
+    - id: vela
+      name: dsh-vela
+      config:
+        # Board 快照的落盘位置。刻意没有默认值——一个 process.cwd() 回落
+        # 会把用户数据散落在进程恰好启动的地方（见 ADR-0006）。
+        boardPath: !!js dshHomePath('vela/board.json')
