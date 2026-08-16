@@ -1,8 +1,11 @@
 /**
- * Vela client half（票 03）。两个 root-scope 的 list slot entry：
- * - `sidebar.footer.action`：导航项，点击切换面板开关。
- * - `shell.overlay`：全幅 Board 面板（ADR-0002）。
- * 两者共享同一个 panel-state 单例，因此点导航项能开合面板。
+ * Vela client half（票 03 / 13）。三个 slot entry：
+ * - `sidebar.footer.action`（根作用域）：导航项，点击切换面板开关。
+ * - `shell.overlay`（根作用域）：全幅 Board 面板（ADR-0002）。
+ * - `conversation.session.header.actions`（**会话**作用域）：把这次讨论里的待办
+ *   提取成卡片。它必须挂在这里而不是面板里：根作用域的 slot 拿不到
+ *   「当前会话」，而提取的全部前提就是知道当前会话是哪个。
+ * 前两个共享同一个 panel-state 单例，因此点导航项能开合面板。
  *
  * 所有注册、controller、listener 都随 client fiber dispose——绑在
  * ctx.effect 的 disposer 上，HMR 不留泄漏。
@@ -16,6 +19,8 @@ import { BoardClient } from './board-client.ts'
 import { installStyles } from './styles.ts'
 import { BoardNav } from './components/BoardNav.tsx'
 import { BoardPanel } from './components/BoardPanel.tsx'
+import { SessionExtract } from './components/SessionExtract.tsx'
+import type { ExtractInjected } from './components/SessionExtract.tsx'
 
 /** 浏览器侧插件名。 */
 export const name = 'vela'
@@ -80,6 +85,28 @@ export function apply(ctx: VelaClientContext): void {
       const dispose = ctx.slots.register(
         { name: 'shell.overlay', id: 'vela-board', order: 20, inject: () => injected },
         BoardPanel,
+      )
+      disposers.push(dispose)
+      return dispose
+    })
+
+    // 会话头部的提取入口（票 13）。这个 slot 是会话作用域的，所以框架会额外
+    // 给组件 `sessionId` 与 `useSession`——那两个不经过这里的 inject。
+    const extractInjected: ExtractInjected = {
+      client,
+      sessions: ctx.sessions,
+      // 建完卡得让看板重拉一次，否则下次打开面板前新卡不会出现。
+      onCreated: () => { void client.refresh() },
+    }
+    ctx.slots.inject('conversation.session.header.actions', () => {
+      const dispose = ctx.slots.register(
+        {
+          name: 'conversation.session.header.actions',
+          id: 'vela-extract',
+          order: 40,
+          inject: () => extractInjected,
+        },
+        SessionExtract,
       )
       disposers.push(dispose)
       return dispose

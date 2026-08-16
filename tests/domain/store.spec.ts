@@ -43,7 +43,7 @@ describe('serialize / parse', () => {
   })
 
   it('拒绝未知的 version', () => {
-    assert.throws(() => parse('{"version":2,"issues":[]}'), (error: unknown) => error instanceof StoreError)
+    assert.throws(() => parse('{"version":99,"issues":[]}'), (error: unknown) => error instanceof StoreError)
   })
 
   it('拒绝未知的 lane——手改错了要报错而不是静默丢卡片', () => {
@@ -67,6 +67,65 @@ describe('serialize / parse', () => {
     assert.equal(issue.maxAttempts, 0)
     assert.deepEqual(issue.exec, {})
     assert.deepEqual(issue.runs, [])
+  })
+})
+
+describe('编号迁移', () => {
+  const issue = (id: string, createdAt: number, extra = ''): string =>
+    `{"id":"${id}","title":"${id}","workspace":"/w","lane":"todo","priority":"none","position":1,"createdAt":${createdAt},"updatedAt":${createdAt}${extra}}`
+
+  it('版本 1 的旧快照被补上编号，顺序按创建时间而非文件里的位置', () => {
+    // 文件里故意倒序：若按位置发号，late 会拿到 1。
+    const board = parse(`{"version":1,"issues":[${issue('late', 900)},${issue('early', 100)}]}`)
+    const numbers = new Map(board.issues.map(i => [i.id, i.number]))
+    assert.equal(numbers.get('early'), 1)
+    assert.equal(numbers.get('late'), 2)
+    assert.equal(board.version, 2)
+    assert.equal(board.nextNumber, 3)
+  })
+
+  it('同一份旧快照读两次得到完全相同的编号', () => {
+    const text = `{"version":1,"issues":[${issue('b', 5)},${issue('a', 5)},${issue('c', 1)}]}`
+    assert.deepEqual(parse(text), parse(text))
+    // 同时间戳时用 id 打平手，因此 a 先于 b。
+    const numbers = new Map(parse(text).issues.map(i => [i.id, i.number]))
+    assert.deepEqual([numbers.get('c'), numbers.get('a'), numbers.get('b')], [1, 2, 3])
+  })
+
+  it('部分有编号的快照，只补缺的那些且不撞号', () => {
+    const board = parse(`{"version":2,"nextNumber":8,"issues":[${issue('kept', 1, ',"number":7')},${issue('fresh', 2)}]}`)
+    const numbers = new Map(board.issues.map(i => [i.id, i.number]))
+    assert.equal(numbers.get('kept'), 7, '已有编号不能被改')
+    assert.equal(numbers.get('fresh'), 1, '补号取最小可用正整数')
+  })
+
+  it('全部有编号的快照原样保留', () => {
+    const text = `{"version":2,"nextNumber":42,"issues":[${issue('a', 1, ',"number":3')},${issue('b', 2, ',"number":9')}]}`
+    const board = parse(text)
+    assert.deepEqual(board.issues.map(i => i.number), [3, 9])
+    assert.equal(board.nextNumber, 42, '文件声明的计数器优先——它记得住退役的编号')
+  })
+
+  it('声明的计数器低于现有最大值时被抬高，不能让下一张卡撞号', () => {
+    const board = parse(`{"version":2,"nextNumber":2,"issues":[${issue('a', 1, ',"number":9')}]}`)
+    assert.equal(board.nextNumber, 10)
+  })
+
+  it('重复编号报错而不是静默重分——编号是对外引用的句柄', () => {
+    assert.throws(
+      () => parse(`{"version":2,"issues":[${issue('a', 1, ',"number":4')},${issue('b', 2, ',"number":4')}]}`),
+      (error: unknown) => error instanceof StoreError && error.kind === 'malformed',
+    )
+  })
+
+  it('拒绝非正整数的编号', () => {
+    for (const bad of ['0', '-1', '1.5']) {
+      assert.throws(
+        () => parse(`{"version":2,"issues":[${issue('a', 1, `,"number":${bad}`)}]}`),
+        (error: unknown) => error instanceof StoreError && error.kind === 'malformed',
+        `number=${bad} 应被拒绝`,
+      )
+    }
   })
 })
 
@@ -100,6 +159,32 @@ describe('BoardStore.open', () => {
     const store = await BoardStore.open(path)
     assert.deepEqual(store.snapshot(), emptyBoard())
   })
+
+  it('版本 1 的旧快照在打开时就被升级并落盘', async () => {
+    await mkdir(join(dir, 'nested'), { recursive: true })
+    const old = '{"version":1,"issues":[{"id":"a","title":"t","workspace":"/w","lane":"todo","priority":"none","position":1,"createdAt":1,"updatedAt":1}]}'
+    await writeFile(path, old, 'utf8')
+    const store = await BoardStore.open(path)
+    assert.equal(store.snapshot().issues[0]?.number, 1)
+    const onDisk = await readFile(path, 'utf8')
+    assert.ok(onDisk.includes('"version": 2'), '升级结果必须已经写回磁盘')
+    assert.ok(onDisk.includes('"number": 1'))
+  })
+
+  it('已经是当前版本且规范的文件不被重写', async () => {
+    await mkdir(join(dir, 'nested'), { recursive: true })
+    const created = createIssue(emptyBoard(), { title: 't', workspace: '/w' }, 1, 'i1')
+    if (!created.ok) throw new Error(created.message)
+    await writeFile(path, serialize(created.value.board), 'utf8')
+    const before = await readFile(path, 'utf8')
+    await BoardStore.open(path)
+    assert.equal(await readFile(path, 'utf8'), before, '已规范的文件不应被动')
+  })
+
+  // 没有「写回失败仍能打开」的测试：跟跨平台地造一个「读得进、写不进」的
+  // 目录在 Windows 上不可靠（chmod 基本是空操作）。那条回退路径的安全性完全
+  // 建立在升级的**确定性**上，而确定性有测试盖着（见「同一份旧快照读两次
+  // 得到完全相同的编号」）——只要那一条成立，没落盘就只是下次重做一次。
 })
 
 describe('BoardStore.mutate', () => {

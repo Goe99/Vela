@@ -15,6 +15,8 @@ import type { BoardClient } from '../board-client.ts'
 export interface EditIssueFormProps {
   readonly issue: Issue
   readonly sandboxPresets: readonly string[]
+  /** 可选的小队。 */
+  readonly squads: readonly { readonly id: string; readonly title: string }[]
   readonly client: BoardClient
   onDone(): void
   onCancel(): void
@@ -42,6 +44,7 @@ export function EditIssueForm(props: EditIssueFormProps): ReturnType<typeof crea
   const [maxAttempts, setMaxAttempts] = useState(String(issue.maxAttempts))
   const [sandbox, setSandbox] = useState(issue.exec.sandbox ?? INHERIT)
   const [agentPreset, setAgentPreset] = useState(issue.exec.agentPreset ?? INHERIT)
+  const [squad, setSquad] = useState(issue.exec.squad ?? INHERIT)
   const [timeoutText, setTimeoutText] = useState(
     issue.exec.timeoutMs === undefined ? INHERIT : String(Math.round(issue.exec.timeoutMs / 1000)),
   )
@@ -79,7 +82,10 @@ export function EditIssueForm(props: EditIssueFormProps): ReturnType<typeof crea
         maxAttempts: attempts,
         exec: {
           sandbox: sandbox === INHERIT ? null : sandbox,
-          agentPreset: agentPreset.trim() === INHERIT ? null : agentPreset.trim(),
+          // squad 与 agentPreset 作用到同一个旋钮，后端会拒绝同时给两个
+          // （ADR-0016）。选了小队就把 preset 清掉，而不是把决定拕给服务端。
+          squad: squad === INHERIT ? null : squad,
+          agentPreset: squad !== INHERIT || agentPreset.trim() === INHERIT ? null : agentPreset.trim(),
           timeoutMs: seconds === undefined ? null : Math.round(seconds * 1000),
         },
       })
@@ -146,12 +152,26 @@ export function EditIssueForm(props: EditIssueFormProps): ReturnType<typeof crea
       createElement('option', { key: INHERIT, value: INHERIT }, '跟随全局默认'),
       ...props.sandboxPresets.map(name => createElement('option', { key: name, value: name }, name)),
     )),
-    field('agent preset（留空跟随默认）', createElement('input', {
-      'aria-label': 'edit agent preset',
-      value: agentPreset,
-      placeholder: '跟随全局默认',
-      onChange: (event: { target: { value: string } }) => setAgentPreset(event.target.value),
-    })),
+    field('派给哪支小队', createElement(
+      'select',
+      {
+        'aria-label': 'edit squad',
+        value: squad,
+        onChange: (event: { target: { value: string } }) => setSquad(event.target.value),
+      },
+      createElement('option', { key: INHERIT, value: INHERIT }, '不用小队（派单个 Agent）'),
+      ...props.squads.map(item => createElement('option', { key: item.id, value: item.id }, item.title)),
+    )),
+    field(
+      squad === INHERIT ? 'agent preset（留空跟随默认）' : 'agent preset（选了小队时不适用）',
+      createElement('input', {
+        'aria-label': 'edit agent preset',
+        value: squad === INHERIT ? agentPreset : '',
+        disabled: squad !== INHERIT,
+        placeholder: squad === INHERIT ? '跟随全局默认' : '由小队决定',
+        onChange: (event: { target: { value: string } }) => setAgentPreset(event.target.value),
+      }),
+    ),
     field('超时秒数（留空 = 不限时）', createElement('input', {
       'aria-label': 'edit timeout seconds',
       type: 'number',

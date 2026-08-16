@@ -18,6 +18,7 @@ import type { Issue } from '../src/domain/types.ts'
 import type {
   ApiProxyLike, PermissionPresetsLike, SessionEventLike, SessionHandle, SessionStoreLike,
 } from '../src/dsh.ts'
+import type { Squad } from '../src/domain/squad.ts'
 
 /** harness 侧收到的每一次调用，按发生顺序。 */
 interface Call { readonly method: string; readonly payload: unknown }
@@ -51,6 +52,10 @@ interface HarnessOptions {
   /** 会话不在 store 里（模拟未 attach）。 */
   readonly detached?: boolean
   readonly defaults?: { agentPreset?: string; sandbox?: string; timeoutMs?: number }
+  /** 同时在跑的 Run 上限；缺省给一个大到不碍事的值。 */
+  readonly maxConcurrentRuns?: number
+  /** 可用的小队；缺省表示这个部署没有小队能力。 */
+  readonly squads?: readonly Squad[]
 }
 
 async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -112,9 +117,18 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     now: () => { clock += 1; return clock },
     newId: () => { seq += 1; return `id${seq}` },
     defaults: options.defaults ?? {},
+    maxConcurrentRuns: () => options.maxConcurrentRuns ?? 999,
     apiProxy: () => api,
     permissionPresets: () => presets,
     sessions: () => sessions,
+    squads: () => (options.squads === undefined ? undefined : {
+      read: async (id) => {
+        const found = options.squads!.find(squad => squad.id === id)
+        return found === undefined
+          ? { ok: false, code: 'not-found' as const, message: `no squad ${id}` }
+          : { ok: true as const, value: found }
+      },
+    }),
     setTimer: (fn) => { const handle = nextTimer++; timers.set(handle, fn); return handle },
     clearTimer: (handle) => { timers.delete(handle as number) },
   })
@@ -139,7 +153,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
 }
 
 /** 建一张卡片并返回它。 */
-async function card(store: BoardStore, overrides: Partial<Issue> = {}): Promise<Issue> {
+async function card(store: BoardStore, overrides: Partial<Issue> = {}, id = 'iss1'): Promise<Issue> {
   let created: Issue | undefined
   await store.mutate((board) => {
     const result = createIssue(board, {
@@ -148,7 +162,7 @@ async function card(store: BoardStore, overrides: Partial<Issue> = {}): Promise<
       ...(overrides.maxAttempts === undefined ? {} : { maxAttempts: overrides.maxAttempts }),
       ...(overrides.exec === undefined ? {} : { exec: overrides.exec }),
       ...(overrides.description === undefined ? {} : { description: overrides.description }),
-    }, 1, 'iss1')
+    }, 1, id)
     if (!result.ok) return undefined
     created = result.value.issue
     return { board: result.value.board, value: undefined }
@@ -560,9 +574,11 @@ describe('生命周期', () => {
       now: () => 1,
       newId: () => 'x',
       defaults: {},
+      maxConcurrentRuns: () => 999,
       apiProxy: () => undefined,
       permissionPresets: () => undefined,
       sessions: () => undefined,
+      squads: () => undefined,
       setTimer: () => 0,
       clearTimer: () => undefined,
     })
@@ -571,6 +587,186 @@ describe('生命周期', () => {
     assert.equal(result.ok, false)
     assert.match(result.ok ? '' : result.message, /apiProxy/)
     runner.dispose()
+  })
+})
+
+describe('看板级并发上限', () => {
+  it('跑满时拒绝派活，且错误里带上当前在跑的数量', async () => {
+    harness = await makeHarness({ maxConcurrentRuns: 1 })
+    const first = await card(harness.store, {}, 'a')
+    const second = await card(harness.store, {}, 'b')
+    must(await harness.runner.dispatch(first.id))
+
+    const blocked = await harness.runner.dispatch(second.id)
+    assert.equal(blocked.ok, false)
+    assert.equal(blocked.ok ? '' : blocked.code, 'conflict')
+    assert.match(blocked.ok ? '' : blocked.message, /1 of at most 1/)
+  })
+
+  it('被拒的卡不改变所在 Lane，也不多出 Run 记录', async () => {
+    harness = await makeHarness({ maxConcurrentRuns: 1 })
+    const first = await card(harness.store, {}, 'a')
+    const second = await card(harness.store, {}, 'b')
+    must(await harness.runner.dispatch(first.id))
+    const laneBefore = reread(harness.store, second.id).lane
+
+    await harness.runner.dispatch(second.id)
+
+    const after = reread(harness.store, second.id)
+    assert.equal(after.lane, laneBefore, '被拒不能把卡拽进 Running')
+    assert.equal(after.runs.length, 0, '被拒不能留下 Run 记录')
+  })
+
+  it('有 Run 结束后额度立即释放', async () => {
+    harness = await makeHarness({ maxConcurrentRuns: 1 })
+    const first = await card(harness.store, {}, 'a')
+    const second = await card(harness.store, {}, 'b')
+    const run = must(await harness.runner.dispatch(first.id))
+    assert.equal((await harness.runner.dispatch(second.id)).ok, false)
+
+    harness.emit(run.sessionId, COMPLETED)
+    await settled()
+
+    must(await harness.runner.dispatch(second.id))
+  })
+
+  it('同时到达的两次派活只放行到上限为止', async () => {
+    harness = await makeHarness({ maxConcurrentRuns: 2 })
+    const cards = [
+      await card(harness.store, {}, 'a'),
+      await card(harness.store, {}, 'b'),
+      await card(harness.store, {}, 'c'),
+      await card(harness.store, {}, 'd'),
+    ]
+    // 四张**不同**的卡同时派活。若派活没有全局串行，四边都会读到
+    // “目前 0 个在跑”然后全部放行。
+    const results = await Promise.all(cards.map(issue => harness.runner.dispatch(issue.id)))
+    assert.equal(results.filter(result => result.ok).length, 2, '恰好两个成功')
+    assert.equal(harness.runner.runningCount(), 2)
+  })
+
+  it('上限为 0 时全面暂停派活，并给出不同于跑满的说法', async () => {
+    harness = await makeHarness({ maxConcurrentRuns: 0 })
+    const issue = await card(harness.store, {}, 'a')
+    const result = await harness.runner.dispatch(issue.id)
+    assert.equal(result.ok, false)
+    assert.match(result.ok ? '' : result.message, /paused/)
+    assert.equal(harness.runner.runningCount(), 0)
+  })
+
+  it('上限为非正整数时视为不限', async () => {
+    harness = await makeHarness({ maxConcurrentRuns: -1 })
+    const first = await card(harness.store, {}, 'a')
+    const second = await card(harness.store, {}, 'b')
+    must(await harness.runner.dispatch(first.id))
+    must(await harness.runner.dispatch(second.id))
+    assert.equal(harness.runner.runningCount(), 2)
+  })
+
+  it('崩溃恢复后上次遗留的 running 不永久占额', async () => {
+    harness = await makeHarness({ maxConcurrentRuns: 1 })
+    const issue = await card(harness.store, {}, 'a')
+    must(await harness.runner.dispatch(issue.id))
+    assert.equal(harness.runner.runningCount(), 1)
+
+    // 新进程：同一份快照里那个 Run 仍标为 running，但没有任何在途状态。
+    const fresh = await makeHarness({ maxConcurrentRuns: 1 })
+    const reopened = await BoardStore.open(join(dir, 'board.json'))
+    const revived = new Runner({
+      store: reopened,
+      now: () => 9999,
+      newId: () => 'z',
+      defaults: {},
+      maxConcurrentRuns: () => 1,
+      apiProxy: () => undefined,
+      permissionPresets: () => undefined,
+      sessions: () => undefined,
+      squads: () => undefined,
+      setTimer: () => 0,
+      clearTimer: () => undefined,
+    })
+    await revived.reconcile()
+    assert.equal(revived.runningCount(), 0, '遗留的 running 必须被结算掉，否则额度永远占着')
+    revived.dispose()
+    fresh.runner.dispose()
+  })
+})
+
+describe('派给小队', () => {
+  const squad = (overrides: Partial<Squad> = {}): Squad => ({
+    id: overrides.id ?? 'vela-backend',
+    title: overrides.title ?? 'backend',
+    instruction: overrides.instruction ?? 'you lead.',
+    members: overrides.members ?? [
+      { name: 'coder', instruction: 'write code', abilities: ['read', 'edit'], backend: 'spawn' },
+    ],
+    ...(overrides.sandbox === undefined ? {} : { sandbox: overrides.sandbox }),
+    maxParallelMembers: overrides.maxParallelMembers ?? 2,
+  })
+
+  it('小队被解成 agent preset 名字交给会话创建', async () => {
+    harness = await makeHarness({ squads: [squad()] })
+    const issue = await card(harness.store, { exec: { squad: 'vela-backend' } })
+    must(await harness.runner.dispatch(issue.id))
+    const create = harness.calls.find(call => call.method === 'create')
+    assert.equal((create?.payload as { agentPreset?: string }).agentPreset, 'vela-backend')
+  })
+
+  it('不指定小队时行为与以前完全一致', async () => {
+    harness = await makeHarness({ squads: [squad()], defaults: { agentPreset: 'standard' } })
+    const issue = await card(harness.store)
+    must(await harness.runner.dispatch(issue.id))
+    const create = harness.calls.find(call => call.method === 'create')
+    assert.equal((create?.payload as { agentPreset?: string }).agentPreset, 'standard')
+  })
+
+  it('小队自带的档位生效，且在提交任务**之前**施加', async () => {
+    harness = await makeHarness({ squads: [squad({ sandbox: 'danger-full-access' })] })
+    const issue = await card(harness.store, { exec: { squad: 'vela-backend' } })
+    must(await harness.runner.dispatch(issue.id))
+
+    assert.deepEqual(harness.applied, [['ses1', 'danger-full-access']])
+    // 顺序是正确性而非风格：DSH 在委派那一刻快照父会话的沙箱给队员，
+    // 档位若晚于第一次委派就对那些队员无效（ADR-0017）。
+    const methods = harness.calls.map(call => call.method)
+    assert.ok(methods.indexOf('prompt') > methods.indexOf('create'), 'prompt 应在 create 之后')
+  })
+
+  it('卡片上的显式档位越过小队的档位——越具体的意图越优先', async () => {
+    harness = await makeHarness({ squads: [squad({ sandbox: 'danger-full-access' })] })
+    const issue = await card(harness.store, {
+      exec: { squad: 'vela-backend', sandbox: 'workspace-write' },
+    })
+    must(await harness.runner.dispatch(issue.id))
+    assert.deepEqual(harness.applied, [['ses1', 'workspace-write']])
+  })
+
+  it('小队被删掉后派活报 404 并说清是哪支队，而不是静默失败', async () => {
+    harness = await makeHarness({ squads: [] })
+    const issue = await card(harness.store, { exec: { squad: 'vela-gone' } })
+    const result = await harness.runner.dispatch(issue.id)
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? '' : result.code, 'not-found')
+    assert.match(result.ok ? '' : result.message, /vela-gone/)
+    // 关键：一次会话都不能建——建了就是一个无人指向的孤儿会话。
+    assert.equal(harness.calls.filter(call => call.method === 'create').length, 0)
+  })
+
+  it('部署没有小队能力时，指定了小队的卡被拒而不是忽略那个字段', async () => {
+    harness = await makeHarness()
+    const issue = await card(harness.store, { exec: { squad: 'vela-backend' } })
+    const result = await harness.runner.dispatch(issue.id)
+    assert.equal(result.ok, false)
+    assert.equal(harness.calls.filter(call => call.method === 'create').length, 0)
+  })
+
+  it('小队的 Run 成功后仍然只到待验收，不直接进 done', async () => {
+    harness = await makeHarness({ squads: [squad()] })
+    const issue = await card(harness.store, { exec: { squad: 'vela-backend' } })
+    const run = must(await harness.runner.dispatch(issue.id))
+    harness.emit(run.sessionId, COMPLETED)
+    await settled()
+    assert.equal(reread(harness.store, issue.id).lane, 'review')
   })
 })
 

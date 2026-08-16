@@ -9,6 +9,7 @@
 
 import { createElement, useState } from 'react'
 import type { Issue, Lane, TokenUsage } from '../../domain/types.ts'
+import { formatIssueNumber } from '../../domain/types.ts'
 import { activeRun } from '../../domain/board.ts'
 import { sumUsage, totalTokens } from '../../domain/usage.ts'
 import type { BoardClient } from '../board-client.ts'
@@ -19,17 +20,23 @@ export interface IssueCardProps {
   readonly issue: Issue
   readonly showWorkspace: boolean
   readonly sandboxPresets: readonly string[]
+  /** 可选的小队，编辑时用。 */
+  readonly squads: readonly { readonly id: string; readonly title: string }[]
   readonly canDispatch: boolean
   /** 在途 Run 的实时用量；不落盘，只用于展示。 */
   readonly liveUsage: TokenUsage | undefined
   readonly client: BoardClient
   readonly isDragging: boolean
+  /** 这张卡的详情抽屉正开着。 */
+  readonly isSelected: boolean
   readonly canMoveUp: boolean
   readonly canMoveDown: boolean
   /** 跳到一次执行的会话；返回 false 表示那个会话已不在列表里。 */
   readonly openSession: (sessionId: string) => boolean
   onChanged(): void | Promise<void>
   onError(message: string | undefined): void
+  /** 打开这张卡的详情抽屉。 */
+  onOpenDetail(): void
   onDragStart(): void
   onDragEnd(): void
   onDropBefore(): void
@@ -82,6 +89,7 @@ export function IssueCard(props: IssueCardProps): ReturnType<typeof createElemen
     return createElement(EditIssueForm, {
       issue,
       sandboxPresets: props.sandboxPresets,
+      squads: props.squads,
       client,
       onDone: () => { setEditing(false); void onChanged() },
       onCancel: () => setEditing(false),
@@ -95,6 +103,7 @@ export function IssueCard(props: IssueCardProps): ReturnType<typeof createElemen
       'data-vela-card': issue.id,
       'data-lane': issue.lane,
       'data-dragging': String(props.isDragging),
+      'data-selected': String(props.isSelected),
       // Running 的卡片不可拖动：拖出去会让活 Run 成为孤儿。
       draggable: issue.lane !== 'running',
       tabIndex: 0,
@@ -119,9 +128,22 @@ export function IssueCard(props: IssueCardProps): ReturnType<typeof createElemen
         event.preventDefault()
         void props.onNudge(direction)
       },
-      'aria-label': `${issue.title}（${issue.lane}）`,
+      'aria-label': `${formatIssueNumber(issue.number)} ${issue.title}（${issue.lane}）`,
     },
-    createElement('div', { 'data-vela-card-title': '' }, issue.title),
+    createElement(
+      'div',
+      { 'data-vela-card-head': '' },
+      createElement('span', { 'data-vela-number': '' }, formatIssueNumber(issue.number)),
+      // 标题是一个真按钮而不是“整张卡可点”：卡上还有删除、派活、编辑表单，
+      // 把点击目标放在根上就得靠猜测意图（排除 button/input/…），这类猜测早晚会错。
+      // 副作用是好的：button 天然可聚焦可回车，键盘用户不需要额外安排。
+      createElement('button', {
+        type: 'button',
+        'data-vela-card-title': '',
+        onClick: () => props.onOpenDetail(),
+        'aria-label': `打开 ${formatIssueNumber(issue.number)} 的详情`,
+      }, issue.title),
+    ),
     createElement(
       'div',
       { 'data-vela-card-meta': '' },
@@ -140,6 +162,15 @@ export function IssueCard(props: IssueCardProps): ReturnType<typeof createElemen
       ...(issue.exec.sandbox === undefined
         ? []
         : [createElement('span', { key: 'sb', 'data-vela-chip': '' }, issue.exec.sandbox)]),
+      // 派给了小队就把它标在卡上：一张卡背后是一人还是一队，影响 Operator
+      // 对这次执行的全部预期（ADR-0016）。
+      ...(issue.exec.squad === undefined
+        ? []
+        : [createElement(
+          'span',
+          { key: 'squad', 'data-vela-chip': '', 'data-tone': 'squad' },
+          `小队：${props.squads.find(item => item.id === issue.exec.squad)?.title ?? issue.exec.squad}`,
+        )]),
     ),
     // 用量：进行中显示实时值（不落盘），结束后显示累计快照。
     ...(running !== undefined && props.liveUsage !== undefined
@@ -227,7 +258,7 @@ export function IssueCard(props: IssueCardProps): ReturnType<typeof createElemen
             type: 'button',
             disabled: busy,
             'data-tone': 'danger',
-            'aria-label': `删除 ${issue.title}`,
+            'aria-label': `删除 ${formatIssueNumber(issue.number)} ${issue.title}`,
             onClick: () => void act(() => client.deleteIssue(issue.id)),
           }, '删除'),
         ]),

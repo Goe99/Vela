@@ -8,6 +8,10 @@
 
 import { API_PREFIX } from '../http/contract.ts'
 import type { Board, TokenUsage } from '../domain/types.ts'
+import { BOARD_VERSION, emptyBoard } from '../domain/types.ts'
+import type { Squad } from '../domain/squad.ts'
+import type { MemberSpan } from '../domain/timeline.ts'
+import type { DocumentTarget } from '../domain/nav.ts'
 
 /** 最小 fetch 形状——只声明这里用到的部分。 */
 export type FetchLike = (input: string, init?: {
@@ -32,7 +36,29 @@ export interface BoardView {
   readonly sandboxPresets: readonly string[]
   /** 这个部署是否具备派活能力。 */
   readonly canDispatch: boolean
+  /** 可选的小队，派活时的下拉靠它。 */
+  readonly squads: readonly SquadShape[]
+  /** 这个部署能不能管理小队（没有可写 preset 根时为 false）。 */
+  readonly canManageSquads: boolean
+  /**
+   * 部署所在平台。小队编辑器靠它把「跑命令」展开成真实工具名——浏览器
+   * 里没有 `process`，这个事实只能由宿主告知。
+   */
+  readonly platform: string
+  /**
+   * 小队并行时间轴，按**会话 id** 索引（ADR-0019）。拿 Run 的 sessionId 去查。
+   *
+   * 只包含真的有泳道的会话，因此「没有这个键」与「有这个键但数组为空」是两回事：
+   * 前者是「不是小队 Run」，后者不会出现。
+   */
+  readonly timelines?: Readonly<Record<string, readonly MemberSpan[]>>
 }
+
+/**
+ * 一支小队在浏览器侧的形状：定义本身加上队长实际收到的完整职责说明
+ * （后者含自动追加的队员名册，编辑器里只读展示）。
+ */
+export type SquadShape = Squad & { readonly resolvedInstruction?: string }
 
 /** 一次写操作的结果。 */
 export type MutationResult =
@@ -41,7 +67,7 @@ export type MutationResult =
 
 function isBoard(value: unknown): value is Board {
   return typeof value === 'object' && value !== null
-    && (value as { version?: unknown }).version === 1
+    && (value as { version?: unknown }).version === BOARD_VERSION
     && Array.isArray((value as { issues?: unknown }).issues)
 }
 
@@ -54,6 +80,10 @@ function readStrings(value: unknown): readonly string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
+function readSquads(value: unknown): readonly SquadShape[] {
+  return Array.isArray(value) ? (value as SquadShape[]) : []
+}
+
 /** 从一个未经校验的响应体里读出视图；形状不对则 undefined。 */
 function readView(body: unknown): BoardView | undefined {
   if (typeof body !== 'object' || body === null) return undefined
@@ -64,14 +94,22 @@ function readView(body: unknown): BoardView | undefined {
     liveUsage: readUsageMap(raw.liveUsage),
     sandboxPresets: readStrings(raw.sandboxPresets),
     canDispatch: raw.canDispatch === true,
+    squads: readSquads(raw.squads),
+    canManageSquads: raw.canManageSquads === true,
+    // 读不到时回落到 linux 而不是报错：这只影响编辑器里展示的工具名，
+    // 真正写盘的那份由宿主用自己的平台生成，不靠这个值。
+    platform: typeof raw.platform === 'string' ? raw.platform : 'linux',
   }
 }
 
 const EMPTY: BoardView = {
-  board: { version: 1, issues: [] },
+  board: emptyBoard(),
   liveUsage: {},
   sandboxPresets: [],
   canDispatch: false,
+  squads: [],
+  canManageSquads: false,
+  platform: 'linux',
 }
 
 /** Board 的浏览器侧客户端。 */
@@ -149,6 +187,45 @@ export class BoardClient {
     exec?: Record<string, unknown>
   }): Promise<MutationResult> {
     return this.write('/issues', 'POST', input)
+  }
+
+  /** 新建一支小队（ADR-0016）。 */
+  createSquad(squad: Record<string, unknown>): Promise<MutationResult> {
+    return this.write('/squads', 'POST', squad)
+  }
+
+  /** 整体覆盖一支已存在的小队。id 不跟着改名走。 */
+  updateSquad(id: string, squad: Record<string, unknown>): Promise<MutationResult> {
+    return this.write(`/squads/${encodeURIComponent(id)}`, 'PATCH', squad)
+  }
+
+  deleteSquad(id: string): Promise<MutationResult> {
+    return this.write(`/squads/${encodeURIComponent(id)}`, 'DELETE')
+  }
+
+  /**
+   * 把一份 DSH 配置文件交给系统编辑器（ADR-0020）。
+   *
+   * 不走 {@link write}：它不改 Board，也不返回看板视图，拿它去走写链会白白
+   * 多一次全量刷新。`opened: false` 不是错误——宿主打不开时 `path` 带回文件
+   * 位置，由界面告知 Operator。
+   */
+  async openDocument(target: DocumentTarget): Promise<{ opened: boolean; path?: string }> {
+    try {
+      const response = await this.fetch(`${API_PREFIX}/open-document`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ target }),
+      })
+      if (!response.ok) return { opened: false }
+      const body = await response.json() as { opened?: unknown; path?: unknown }
+      return {
+        opened: body.opened === true,
+        ...(typeof body.path === 'string' ? { path: body.path } : {}),
+      }
+    } catch {
+      return { opened: false }
+    }
   }
 
   /** 一次落一批卡片（票 13）。整批成功或整批不落。 */

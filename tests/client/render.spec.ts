@@ -20,7 +20,12 @@ import { BoardPanel } from '../../src/client/components/BoardPanel.tsx'
 import { BoardGrid } from '../../src/client/components/BoardGrid.tsx'
 import type { BoardGridProps } from '../../src/client/components/BoardGrid.tsx'
 import { EditIssueForm } from '../../src/client/components/EditIssueForm.tsx'
+import { PanelSidebar } from '../../src/client/components/PanelSidebar.tsx'
+import { SquadsPage } from '../../src/client/components/SquadsPage.tsx'
+import { NAV_ITEMS } from '../../src/domain/nav.ts'
+import type { Squad } from '../../src/domain/squad.ts'
 import type { Board, Issue } from '../../src/domain/types.ts'
+import { BOARD_VERSION } from '../../src/domain/types.ts'
 
 /** 造一份注入面，形状与 client 入口里 inject 工厂的返回值一致。 */
 function injected() {
@@ -29,9 +34,10 @@ function injected() {
     ok: true,
     status: 200,
     json: async () => ({
-      board: { version: 1, issues: [] },
+      board: { version: BOARD_VERSION, nextNumber: 1, issues: [] },
       liveUsage: {},
       sandboxPresets: ['workspace-write'],
+      squads: [],
       canDispatch: true,
     }),
   }))
@@ -46,8 +52,11 @@ function gridProps(overrides: Partial<BoardGridProps> = {}): BoardGridProps {
     showWorkspace: true,
     defaultWorkspace: '/w',
     sandboxPresets: ['workspace-write', 'danger-full-access'],
+    squads: [],
     canDispatch: true,
     liveUsage: {},
+    selectedId: undefined,
+    onSelect: () => undefined,
     openSession: face.openSession,
     client: face.client,
     onChanged: () => undefined,
@@ -56,21 +65,22 @@ function gridProps(overrides: Partial<BoardGridProps> = {}): BoardGridProps {
 }
 
 const sampleBoard: Board = {
-  version: 1,
+  version: BOARD_VERSION,
+  nextNumber: 4,
   issues: [
     {
-      id: 'i1', title: '待办的卡片', description: '', workspace: '/w',
+      id: 'i1', number: 1, title: '待办的卡片', description: '', workspace: '/w',
       lane: 'backlog', priority: 'none', position: 1,
       createdAt: 1, updatedAt: 1, maxAttempts: 0, exec: {}, runs: [],
     },
     {
-      id: 'i2', title: '等验收的卡片', description: '', workspace: '/w',
+      id: 'i2', number: 2, title: '等验收的卡片', description: '', workspace: '/w',
       lane: 'review', priority: 'high', position: 1,
       createdAt: 1, updatedAt: 1, maxAttempts: 0, exec: {},
       runs: [{ id: 'r1', sessionId: 's1', startedAt: 1, status: 'settled', endedAt: 2, outcome: 'completed' }],
     },
     {
-      id: 'i3', title: '失败的卡片', description: '', workspace: '/w',
+      id: 'i3', number: 3, title: '失败的卡片', description: '', workspace: '/w',
       lane: 'failed', priority: 'none', position: 1,
       createdAt: 1, updatedAt: 1, maxAttempts: 0, exec: {},
       runs: [{ id: 'r2', sessionId: 's2', startedAt: 1, status: 'settled', endedAt: 2, outcome: 'error', failure: '依赖没装' }],
@@ -120,6 +130,15 @@ describe('BoardPanel', () => {
 })
 
 describe('BoardGrid', () => {
+  it('编号真的渲到卡片上，且每张卡一个', () => {
+    const html = renderToStaticMarkup(createElement(BoardGrid, gridProps({ issues: sampleBoard.issues })))
+    for (const label of ['V-1', 'V-2', 'V-3']) {
+      assert.ok(html.includes(`>${label}<`), `应渲出编号 ${label}`)
+    }
+    const occurrences = html.split('data-vela-number').length - 1
+    assert.equal(occurrences, 3, '三张卡应恰好三个编号位')
+  })
+
   it('空看板也能渲染出六列', () => {
     const html = renderToStaticMarkup(createElement(BoardGrid, gridProps()))
     for (const lane of ['backlog', 'todo', 'running', 'review', 'done', 'failed']) {
@@ -157,7 +176,7 @@ describe('BoardGrid', () => {
 
   it('进行中的卡片不可拖动——拖出去会让活 Run 成为孤儿', () => {
     const running: Issue = {
-      id: 'i4', title: '正在跑', description: '', workspace: '/w',
+      id: 'i4', number: 4, title: '正在跑', description: '', workspace: '/w',
       lane: 'running', priority: 'none', position: 1,
       createdAt: 1, updatedAt: 1, maxAttempts: 0, exec: {},
       runs: [{ id: 'r3', sessionId: 's3', startedAt: 1, status: 'running' }],
@@ -170,7 +189,7 @@ describe('BoardGrid', () => {
 
   it('进行中的实时用量显示出来', () => {
     const running: Issue = {
-      id: 'i5', title: '烧着', description: '', workspace: '/w',
+      id: 'i5', number: 5, title: '烧着', description: '', workspace: '/w',
       lane: 'running', priority: 'none', position: 1,
       createdAt: 1, updatedAt: 1, maxAttempts: 0, exec: {},
       runs: [{ id: 'r4', sessionId: 's4', startedAt: 1, status: 'running' }],
@@ -212,6 +231,7 @@ describe('EditIssueForm', () => {
     const html = renderToStaticMarkup(createElement(EditIssueForm, {
       issue,
       sandboxPresets: ['workspace-write', 'danger-full-access'],
+      squads: [],
       client: face.client,
       onDone: () => undefined,
       onCancel: () => undefined,
@@ -220,5 +240,97 @@ describe('EditIssueForm', () => {
     assert.ok(html.includes('跟随全局默认'))
     assert.ok(html.includes('danger-full-access'))
     assert.ok(html.includes('自动重试上限'))
+  })
+})
+
+describe('PanelSidebar', () => {
+  const sidebarProps = (overrides: Record<string, unknown> = {}) => ({
+    current: 'board' as const,
+    attention: 0,
+    onSelect: () => undefined,
+    onClosePanel: () => undefined,
+    onOpenDocument: () => undefined,
+    ...overrides,
+  })
+
+  it('十二项全部渲出来，一项不少', () => {
+    const html = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps()))
+    for (const item of NAV_ITEMS) {
+      assert.ok(html.includes(`data-vela-nav-item="${item.key}"`), `缺了 ${item.key}`)
+      assert.ok(html.includes(item.label), `缺了 ${item.key} 的文案`)
+    }
+  })
+
+  it('三个分组标题都在', () => {
+    const html = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps()))
+    for (const title of ['个人', '工作区', '配置']) {
+      assert.ok(html.includes(title), `缺了分组 ${title}`)
+    }
+  })
+
+  it('置灏项真的不可点，且两种原因分开标注', () => {
+    const html = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps()))
+    assert.ok(/data-vela-nav-item="skills"[^>]*disabled/.test(html)
+      || /disabled[^>]*data-vela-nav-item="skills"/.test(html), 'skills 应不可点')
+    assert.ok(html.includes('data-disabled-reason="no-such-page"'), 'skills 的原因是「没这个页」')
+    assert.ok(html.includes('data-disabled-reason="not-yet"'), '另三项的原因是「还没做」')
+  })
+
+  it('待处理为 0 时不显徐标，大于 0 时显数字', () => {
+    const none = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps()))
+    assert.ok(!none.includes('data-vela-nav-badge'), '为零时不应有徐标')
+    const some = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps({ attention: 4 })))
+    assert.ok(some.includes('data-vela-nav-badge'))
+    assert.ok(some.includes('>4<'))
+  })
+
+  it('当前项高亮，其余不高亮', () => {
+    const html = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps({ current: 'squads' })))
+    assert.ok(/data-vela-nav-item="squads"[^>]*data-active="true"/.test(html), 'squads 应高亮')
+    assert.equal((html.match(/data-active="true"/g) ?? []).length, 1, '只能高亮一项')
+  })
+
+  it('保留 Multica 署名（License 条件 b）', () => {
+    const html = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps()))
+    assert.ok(html.includes('Powered by Multica'))
+  })
+})
+
+describe('SquadsPage', () => {
+  const squad: Squad = {
+    id: 'vela-backend',
+    title: 'backend',
+    instruction: 'you lead.',
+    members: [{ name: 'coder', instruction: 'write code', abilities: ['read', 'edit'], backend: 'spawn' }],
+    maxParallelMembers: 2,
+  }
+
+  const pageProps = (overrides: Record<string, unknown> = {}) => ({
+    squads: [] as readonly Squad[],
+    canManage: true,
+    sandboxPresets: ['workspace-write'],
+    platform: 'linux',
+    client: injected().client,
+    onChanged: () => undefined,
+    ...overrides,
+  })
+
+  it('没有小队时给出空状态而不是一片空白', () => {
+    const html = renderToStaticMarkup(createElement(SquadsPage, pageProps()))
+    assert.ok(html.includes('data-vela-empty'))
+    assert.ok(html.includes('新建小队'))
+  })
+
+  it('列出已有的小队，带队员数与号牌数', () => {
+    const html = renderToStaticMarkup(createElement(SquadsPage, pageProps({ squads: [squad] })))
+    assert.ok(html.includes('data-vela-squad-row="vela-backend"'))
+    assert.ok(html.includes('1 名队员'))
+    assert.ok(html.includes('同时最多 2 个在跑'))
+  })
+
+  it('没有可写 preset 根时整页只说明原因，不给建队入口', () => {
+    const html = renderToStaticMarkup(createElement(SquadsPage, pageProps({ canManage: false })))
+    assert.ok(html.includes('squadRoot'), '要告知怎么改')
+    assert.ok(!html.includes('新建小队'), '不能给一个点了就报错的按钮')
   })
 })

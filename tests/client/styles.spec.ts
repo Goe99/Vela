@@ -22,10 +22,31 @@ function block(selector: string): string {
   return rest.slice(0, rest.indexOf('}'))
 }
 
-/** 日间色板：默认值那一块。 */
-const LIGHT = block('[data-vela-panel],\n[data-vela-nav] {')
-/** 夜间色板：宿主主题钩子下覆盖的那一块。 */
-const DARK = block('body[data-ds-dark-theme] [data-vela-panel],')
+/**
+ * 取两个色板块。
+ *
+ * 按「哪个块里定义了 `--vela-canvas`」定位，而不是按完整的选择器字符串。
+ * 真实事故：给会话头部的提取块补色板时往选择器里多加了两行，按字符串
+ * 定位的版本立刻全红——而那次改动本身是对的。测试该盯的是「色板里有什么」，
+ * 不是「哪些选择器共用它」。
+ *
+ * @param from - 从哪个位置开始找。
+ * @returns 那个块的文本与它的起始位置。
+ */
+function paletteFrom(from: number): { text: string; at: number } {
+  const marker = VELA_CSS.indexOf('--vela-canvas:', from)
+  assert.ok(marker >= 0, '找不到色板块（没有 --vela-canvas 的定义）')
+  // 向前回找该块的开花括号，再向后到闭花括号。
+  const open = VELA_CSS.lastIndexOf('{', marker)
+  const close = VELA_CSS.indexOf('}', marker)
+  assert.ok(open >= 0 && close > open, '色板块的花括号对不上')
+  return { text: VELA_CSS.slice(open, close), at: close }
+}
+
+/** 日间色板：第一个定义色板变量的块。 */
+const LIGHT = paletteFrom(0).text
+/** 夜间色板：它后面那一个。 */
+const DARK = paletteFrom(paletteFrom(0).at).text
 
 /** 读一个色板块里某个变量的取值。 */
 function value(palette: string, name: string): string | undefined {
@@ -71,6 +92,51 @@ describe('三层表面必须逐级不同', () => {
   it('日间画布不是纯白——整片纯白就是「刺眼」的来源', () => {
     assert.notEqual(value(LIGHT, 'canvas')?.toLowerCase(), '#ffffff')
     assert.notEqual(value(LIGHT, 'canvas')?.toLowerCase(), '#fff')
+  })
+
+  /**
+   * 夜间把阴影设成了 `none`，所以卡片能不能浮起来**完全**靠亮度差。
+   *
+   * 一次浏览器里的目视验证抓到了这个：早期卡片取 `#212734`、泳道取 `#171b23`，
+   * 只差十几个度，实测“浮起感微弱”。阴影又是 `none`，于是没有任何其他线索。
+   */
+  it('夜间卡片与泳道的亮度差要够大——那里没有阴影可依靠', () => {
+    const level = (color: string | undefined): number =>
+      Number.parseInt(color?.replace('#', '').slice(0, 2) ?? '0', 16)
+    const card = level(value(DARK, 'card'))
+    const lane = level(value(DARK, 'lane'))
+    assert.ok(card > lane, '夜间卡片必须比泳道亮')
+    assert.ok(card - lane >= 12,
+      `夜间卡片与泳道只差 ${card - lane} 个度，卡片浮不起来（夜间阴影是 none，没有备胎）`)
+  })
+})
+
+/**
+ * 四档优先必须互相可分。
+ *
+ * 一次浏览器里的目视验证抓到了这个：当时只有 `urgent`/`high` 一条规则，
+ * `low` 与 `medium` 共用默认样式，于是四档在颜色上只有两种。
+ */
+describe('四档优先必须互相可分', () => {
+  it('medium 有自己的颜色，不与默认（无/低）同色', () => {
+    const rule = block("[data-vela-chip][data-tone='medium'] {")
+    assert.match(rule, /var\(--vela-info/, 'medium 要用一个介于默认与高之间的色')
+  })
+
+  it('urgent 与 high 不能完全一样——一列卡片里得分得出载重', () => {
+    const rule = block("[data-vela-chip][data-tone='urgent'] {")
+    // 不另开色相（那会让四档看起来像四个不同的东西），只把同一色相推重。
+    assert.match(rule, /border-color|font-weight/, 'urgent 要在 high 之上再加一层区分')
+  })
+
+  it('四个档位的呈现两两不同', () => {
+    // 默认（无/低）走 [data-vela-chip] 本体；medium、high、urgent 各有额外规则。
+    const base = block('[data-vela-chip] {')
+    const medium = block("[data-vela-chip][data-tone='medium'] {")
+    const high = block("[data-vela-chip][data-tone='urgent'],")
+    const urgent = block("[data-vela-chip][data-tone='urgent'] {")
+    const shapes = [base, medium, high, urgent]
+    assert.equal(new Set(shapes).size, shapes.length, '有两个档位的规则完全相同')
   })
 })
 

@@ -59,6 +59,18 @@ function find(board: Board, id: string): Issue | undefined {
   return board.issues.find(issue => issue.id === id)
 }
 
+/**
+ * `squad` 与 `agentPreset` 最终作用到同一个旋钮（ADR-0016），同时给两个
+ * 就没有一个诚实的优先规则可讲——与其默默挑一个，不如当场拒绝。
+ */
+function execConflict(exec: ExecOverrides | undefined): string | undefined {
+  if (exec === undefined) return undefined
+  if (exec.squad !== undefined && exec.agentPreset !== undefined) {
+    return 'exec.squad and exec.agentPreset are mutually exclusive'
+  }
+  return undefined
+}
+
 function replace(board: Board, next: Issue): Board {
   return { ...board, issues: board.issues.map(issue => (issue.id === next.id ? next : issue)) }
 }
@@ -95,8 +107,11 @@ export function createIssue(
   if (!Number.isInteger(maxAttempts) || maxAttempts < 0) {
     return fail('invalid', 'maxAttempts must be a non-negative integer')
   }
+  const conflict = execConflict(input.exec)
+  if (conflict !== undefined) return fail('invalid', conflict)
   const issue: Issue = {
     id,
+    number: board.nextNumber,
     title,
     description: input.description ?? '',
     workspace: input.workspace,
@@ -109,7 +124,10 @@ export function createIssue(
     exec: input.exec ?? {},
     runs: [],
   }
-  return ok({ board: { ...board, issues: [...board.issues, issue] }, issue })
+  return ok({
+    board: { ...board, nextNumber: board.nextNumber + 1, issues: [...board.issues, issue] },
+    issue,
+  })
 }
 
 /** 修改 Issue 的内容。不改 lane 与 position——那走 moveIssue。 */
@@ -127,6 +145,8 @@ export function updateIssue(
   if (input.maxAttempts !== undefined && (!Number.isInteger(input.maxAttempts) || input.maxAttempts < 0)) {
     return fail('invalid', 'maxAttempts must be a non-negative integer')
   }
+  const conflict = execConflict(input.exec)
+  if (conflict !== undefined) return fail('invalid', conflict)
   const next: Issue = {
     ...issue,
     ...(input.title === undefined ? {} : { title: input.title.trim() }),

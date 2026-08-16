@@ -83,8 +83,67 @@ export interface SessionsApiLike {
 }
 
 /** 宿主 apiProxy 服务中 Vela 实际用到的部分。 */
+/**
+ * 把一份配置文件交给系统编辑器打开。
+ *
+ * `opened: false` 不是失败——它意味着宿主打不开（比如无头环境），此时
+ * `path` 会带回文件位置，由调用方自己展示给人看。把它当失败会让 Operator
+ * 在本可以自己去打开的情形下只看到一句报错。
+ */
+export interface OpenDocumentApiLike {
+  openDocument(request: RpcRequest<Record<string, never>>):
+  Promise<RpcResponse<{ readonly opened: boolean; readonly path?: string }>>
+}
+
+/** agent preset 面里 Vela 用到的部分。 */
+export interface AgentPresetsApiLike {
+  openDocument(request: RpcRequest<{ readonly agentPreset?: string }>):
+  Promise<RpcResponse<{ readonly opened: boolean; readonly path?: string }>>
+}
+
+/**
+ * agent preset 服务（进程内，不走 RPC）。Vela 用两个方法：
+ *
+ * - `read`：把基准 preset 的组合原文拿回来，当作小队组合的底座（ADR-0016）。
+ * - `composedPreset`：反查一个 agent 正跑在哪份 preset 上，号牌层靠它知道一次派生
+ *   属于哪支队（ADR-0018）。
+ *
+ * 为什么不自己拼路径去读基准文件：它住在 dsh 自己的安装目录里，而且它有
+ * 多个 preset 根与一套优先级规则（出厂根遮盖家目录根）。拿名字问它要到哪份，
+ * 是唯一能跟上部署配置的问法。
+ *
+ * `read` 返回的是**原始 YAML 文本**（带注释和 `!!js` 标签）。这正是我们要的：
+ * 追加队员行是纯文本拼接，不需要解析它。
+ */
+export interface AgentPresetsServiceLike {
+  read(id: string): Promise<string>
+  /**
+   * 这个 agent 现在跑在哪份 preset 上，没加入任何 preset 时 undefined。
+   *
+   * 读的是 agent **活的**作用域链，不是会话头——一个中途换过 preset 的会话，
+   * 它的头里还写着旧名字。写成可选：旧版本的 dsh 可能没有它。
+   */
+  composedPreset?(agentCtx: unknown): string | undefined
+}
+
+/**
+ * 子代理注册表。Vela 往里面挂自己的委派后端（包住原生的那个，外面加一道
+ * 号牌闸门，ADR-0018）。
+ *
+ * 这里声明成 `unknown` 而不是展开形状：那一堆类型（provider、run、capabilities）
+ * 是 **Vela 对它们的建模**，住在 `squad-provider.ts` 里与那层代码放在一起。把它们
+ * 搬到这个文件会让一个“最小接口声明”模块背上一个子系统的全部词汇。
+ */
+export type SubagentsHandle = unknown
+
 export interface ApiProxyLike {
   readonly sessions: SessionsApiLike
+  /**
+   * 设置面。Vela 只用 `openDocument`：DSH 没有给第三方插件的页面导航，
+   * 把设置文件交给系统编辑器是「去设置」能做到的全部（ADR-0020）。
+   */
+  readonly settings?: OpenDocumentApiLike
+  readonly agentPresets?: AgentPresetsApiLike
 }
 
 /**
@@ -136,6 +195,8 @@ export interface VelaContext {
   get(name: 'apiProxy'): ApiProxyLike | undefined
   get(name: 'permissionPresets'): PermissionPresetsLike | undefined
   get(name: 'sessions'): SessionStoreLike | undefined
+  get(name: 'agentPresets'): AgentPresetsServiceLike | undefined
+  get(name: 'subagents'): SubagentsHandle | undefined
   readonly webServer?: WebServerLike
   readonly logger?: {
     warn(message: unknown): void

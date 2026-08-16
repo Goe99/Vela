@@ -32,7 +32,9 @@ const CSS = `
    三层表面必须**逐级不同**，这正是日间模式曾经坏掉的地方。
    ───────────────────────────────────────────────────────── */
 [data-vela-panel],
-[data-vela-nav] {
+[data-vela-nav],
+[data-vela-extract],
+[data-vela-extract-open] {
   /* 画布：面板底色，比泳道暗一档，让泳道浮出来 */
   --vela-canvas: #eef1f6;
   /* 泳道底色 */
@@ -57,6 +59,10 @@ const CSS = `
   --vela-danger-soft: #fdeff1;
   --vela-warn: #a55a00;
   --vela-warn-soft: #fff4e0;
+  /* 中等优先：介于默认与高之间的青蓝。早期 low/medium 共用默认样式，于是
+     四档优先只有两种颜色——浏览器里实测确认“低”与“中”在颜色上分不开。 */
+  --vela-info: #1f6f8f;
+  --vela-info-soft: #e4f2f8;
   --vela-hover: #e6ecf5;
   --vela-card-shadow: 0 1px 2px rgba(21, 44, 92, .07), 0 1px 3px rgba(21, 44, 92, .05);
   --vela-scroll: #c9d4e5;
@@ -67,11 +73,15 @@ const CSS = `
    只覆盖同一组变量；下面所有规则都不再关心明暗。
    ───────────────────────────────────────────────────────── */
 body[data-ds-dark-theme] [data-vela-panel],
-body[data-ds-dark-theme] [data-vela-nav] {
+body[data-ds-dark-theme] [data-vela-nav],
+body[data-ds-dark-theme] [data-vela-extract],
+body[data-ds-dark-theme] [data-vela-extract-open] {
   --vela-canvas: #101319;
   --vela-lane: #171b23;
   --vela-lane-head: #1c212b;
-  --vela-card: #212734;
+  /* 卡片比泳道亮一档。早期取 #212734，与泳道只差十几个度——浏览器里
+     实测确认卡片基本浮不起来。 */
+  --vela-card: #262e3d;
   --vela-line: #313a4b;
   --vela-line-soft: #272e3b;
   --vela-text: #e6ecf5;
@@ -85,6 +95,8 @@ body[data-ds-dark-theme] [data-vela-nav] {
   --vela-danger-soft: #2c1b20;
   --vela-warn: #f0b959;
   --vela-warn-soft: #372a15;
+  --vela-info: #6ec5e0;
+  --vela-info-soft: #142a33;
   --vela-hover: #272e3b;
   /* 夜间不需要阴影抬升：亮度差本身就够了 */
   --vela-card-shadow: none;
@@ -323,6 +335,24 @@ body[data-ds-dark-theme] [data-vela-nav] {
   outline-offset: 1px;
 }
 
+/* 编号与标题同一行起排：编号窄且固定，标题吃掉剩下的宽度。 */
+[data-vela-card-head] {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+[data-vela-number] {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--vela-text-3);
+  /* 编号是给人念的句柄，不是可点的控件——别做成链接样子。 */
+  user-select: all;
+}
+
 [data-vela-card-title] {
   font-weight: 600;
   color: var(--vela-text);
@@ -360,6 +390,20 @@ body[data-ds-dark-theme] [data-vela-nav] {
   background: var(--vela-warn-soft);
   border-color: transparent;
   color: var(--vela-warn);
+}
+
+/* 急与高本来同色，在一列卡片里分不出载重。给急加一圈边框与加粗：
+   不另开一个色相（那会让四档看起来像四个不同的东西），只把同一色相推得更重。 */
+[data-vela-chip][data-tone='urgent'] {
+  border-color: var(--vela-warn);
+  font-weight: 600;
+}
+
+/* 中等：介于默认（无/低）与高之间。没有它的时候四档只有两种颜色。 */
+[data-vela-chip][data-tone='medium'] {
+  background: var(--vela-info-soft);
+  border-color: transparent;
+  color: var(--vela-info);
 }
 
 [data-vela-failure] {
@@ -475,6 +519,688 @@ body[data-ds-dark-theme] [data-vela-nav] {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ── 面板主体：左导航 + 右内容 ───────────────────────────── */
+
+/* ── 小队并行时间轴（票 10）─────────────────────── */
+
+[data-vela-timeline] {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--vela-line);
+}
+
+[data-vela-timeline-scale] {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--vela-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 一条泳道：左标签 / 中间轨道 / 右状态。轨道占剩下的全部宽度，因为
+   重叠关系全靠那一段传达。 */
+[data-vela-lane] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+[data-vela-panel] button[data-vela-lane-label] {
+  all: unset;
+  cursor: pointer;
+  flex: 0 0 8rem;
+  display: flex;
+  flex-direction: column;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  overflow: hidden;
+}
+
+[data-vela-panel] button[data-vela-lane-label]:hover [data-vela-lane-task] {
+  text-decoration: underline;
+}
+
+[data-vela-panel] button[data-vela-lane-label]:focus-visible {
+  outline: 2px solid var(--vela-accent);
+  outline-offset: 1px;
+}
+
+[data-vela-lane-member] {
+  font-weight: 600;
+  color: var(--vela-text-1);
+}
+
+/* 任务描述可能很长。单行截断而不换行：泳道高度不齐会让重叠关系变难读。
+   完整文本在 title 里。 */
+[data-vela-lane-task] {
+  color: var(--vela-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-vela-lane-track] {
+  flex: 1 1 auto;
+  min-width: 0;
+  block-size: 10px;
+  border-radius: 5px;
+  background: var(--vela-line);
+  overflow: hidden;
+}
+
+[data-vela-lane-bar] {
+  block-size: 100%;
+  border-radius: 5px;
+  background: var(--vela-text-3);
+}
+
+[data-vela-lane][data-tone="ok"] [data-vela-lane-bar] { background: var(--vela-ok); }
+[data-vela-lane][data-tone="bad"] [data-vela-lane-bar] { background: var(--vela-danger); }
+[data-vela-lane][data-tone="running"] [data-vela-lane-bar] {
+  background: var(--vela-accent);
+  animation: vela-lane-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes vela-lane-pulse {
+  50% { opacity: .55; }
+}
+
+[data-vela-lane-status] {
+  flex: 0 0 6rem;
+  text-align: right;
+  color: var(--vela-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-vela-timeline-note] {
+  margin: 2px 0 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--vela-text-3);
+}
+
+[data-vela-timeline-empty] {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--vela-line);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* 搜索框（票 11）。它得能伸缩：顶栏里还有 Workspace 筛选与两个按钮。 */
+[data-vela-search] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 18rem;
+  min-width: 8rem;
+}
+
+[data-vela-search] input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+[data-vela-search-hits] {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--vela-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 搜索无结果。占整个内容区而不是塞在某一列里：六条空泳道看起来像
+   看板被清空了，而那是个令人心惊的误会。 */
+[data-vela-no-results] {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--vela-text-2);
+}
+
+[data-vela-no-results] p {
+  margin: 0;
+}
+
+[data-vela-drawer] {
+  flex: 0 0 40%;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--vela-line);
+  background: var(--vela-lane);
+  animation: vela-drawer-in .14s ease-out;
+}
+
+@keyframes vela-drawer-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+[data-vela-drawer]:focus-visible {
+  outline: 2px solid var(--vela-accent);
+  outline-offset: -2px;
+}
+
+[data-vela-drawer-head] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--vela-line);
+}
+
+[data-vela-drawer-lane] {
+  font-size: 11px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-drawer-body] {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+[data-vela-drawer-label] {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-drawer-actions] {
+  display: flex;
+  gap: 6px;
+}
+
+[data-vela-drawer-section] {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--vela-text-3);
+}
+
+[data-vela-fields] {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+[data-vela-field] {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+
+[data-vela-field-label] {
+  flex: 0 0 5.5rem;
+  color: var(--vela-text-3);
+}
+
+[data-vela-field-value] {
+  flex: 1 1 auto;
+  color: var(--vela-text-1);
+  word-break: break-all;
+}
+
+[data-vela-muted] {
+  margin: 0;
+  font-size: 12px;
+  color: var(--vela-text-3);
+}
+
+[data-vela-run] {
+  padding: 6px 8px;
+  border: 1px solid var(--vela-line);
+  border-left: 3px solid var(--vela-text-3);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+[data-vela-run][data-outcome="completed"] { border-left-color: var(--vela-ok); }
+[data-vela-run][data-outcome="error"] { border-left-color: var(--vela-danger); }
+[data-vela-run][data-outcome="timeout"] { border-left-color: var(--vela-warn); }
+[data-vela-run][data-outcome="aborted"] { border-left-color: var(--vela-warn); }
+[data-vela-run][data-outcome="running"] { border-left-color: var(--vela-accent); }
+
+[data-vela-run-head] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+[data-vela-run-ordinal] {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+[data-vela-run-outcome] {
+  font-size: 11px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-run-failure] {
+  margin: 0;
+  font-size: 11px;
+  color: var(--vela-danger);
+  word-break: break-word;
+}
+
+[data-vela-card][data-selected="true"] {
+  border-color: var(--vela-accent);
+  box-shadow: inset 0 0 0 1px var(--vela-accent);
+}
+
+[data-vela-panel] button[data-vela-card-title] {
+  all: unset;
+  cursor: pointer;
+  flex: 1 1 auto;
+  font: inherit;
+  text-align: left;
+  color: var(--vela-text-1);
+  word-break: break-word;
+}
+
+[data-vela-panel] button[data-vela-card-title]:hover {
+  text-decoration: underline;
+}
+
+[data-vela-panel] button[data-vela-card-title]:focus-visible {
+  outline: 2px solid var(--vela-accent);
+  outline-offset: 1px;
+}
+
+[data-vela-body] {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+[data-vela-sidebar] {
+  flex: 0 0 auto;
+  width: 176px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 6px;
+  overflow-y: auto;
+  border-right: 1px solid var(--vela-line);
+  background: var(--vela-lane);
+}
+
+[data-vela-nav-group] {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 10px;
+}
+
+[data-vela-nav-group-title] {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--vela-text-3);
+}
+
+/* 导航项重置掉面板里通用的按钮样式：它们是列表行，不是控件。 */
+[data-vela-panel] [data-vela-nav-item] {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--vela-text-2);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+[data-vela-panel] [data-vela-nav-item]:hover:not(:disabled) {
+  background: var(--vela-hover);
+  color: var(--vela-text);
+}
+
+[data-vela-panel] [data-vela-nav-item][data-active="true"] {
+  background: var(--vela-accent-soft);
+  border-color: var(--vela-accent);
+  color: var(--vela-accent);
+  font-weight: 600;
+}
+
+/* 置灏项：看得见但明确不可点。悬停提示里写着原因（ADR-0020）。 */
+[data-vela-panel] [data-vela-nav-item]:disabled {
+  color: var(--vela-text-3);
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+[data-vela-nav-glyph] {
+  flex: none;
+  width: 15px;
+  text-align: center;
+  font-size: 12px;
+}
+
+[data-vela-nav-label] {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-vela-nav-badge] {
+  flex: none;
+  min-width: 17px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--vela-accent);
+  color: var(--vela-accent-text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+[data-vela-nav-brand] {
+  margin-top: auto;
+  padding: 6px 8px;
+  font-size: 10px;
+  color: var(--vela-text-3);
+}
+
+[data-vela-notice] {
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--vela-warn-soft);
+  color: var(--vela-warn);
+  font-size: 11px;
+}
+
+/* ── 小队页 ────────────────────────────────────────────── */
+
+[data-vela-squads] {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 18px;
+}
+
+[data-vela-squads] h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+[data-vela-squads] h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-squad-head] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+[data-vela-squad-head] h2,
+[data-vela-squad-head] h3 {
+  flex: 1 1 auto;
+}
+
+[data-vela-squad-row] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 11px;
+  margin-bottom: 7px;
+  border: 1px solid var(--vela-line-soft);
+  border-radius: 7px;
+  background: var(--vela-card);
+  box-shadow: var(--vela-card-shadow);
+}
+
+[data-vela-squad-title] {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+[data-vela-squad-meta] {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+[data-vela-squad-editor] {
+  max-width: 720px;
+}
+
+/* 每个区块自己一张卡：「整支队的设置」与「队员」必须看上去就是两层
+   （ADR-0017：沙箱档位是队级的，工具白名单是队员级的）。 */
+[data-vela-squad-section] {
+  padding: 11px 13px;
+  margin: 10px 0;
+  border: 1px solid var(--vela-line-soft);
+  border-radius: 7px;
+  background: var(--vela-card);
+}
+
+[data-vela-squad-section="squad"] {
+  border-left: 3px solid var(--vela-accent);
+}
+
+[data-vela-member] {
+  padding: 9px 11px;
+  margin-bottom: 8px;
+  border: 1px dashed var(--vela-line);
+  border-radius: 6px;
+  background: var(--vela-lane);
+}
+
+[data-vela-abilities] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: center;
+  margin: 5px 0;
+}
+
+[data-vela-ability] {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+[data-vela-ability] input {
+  width: auto;
+}
+
+/* 队长实际收到的名册：只读展示，要看得出是自动生成的。 */
+[data-vela-roster] {
+  margin: 5px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--vela-canvas);
+  color: var(--vela-text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+[data-vela-squads] label {
+  display: block;
+  margin: 7px 0;
+  font-size: 12px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-squads] textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+/* 小队签：与其余 chip 区分开，一眼看得出这张卡背后是一队而不是一人。 */
+[data-vela-chip][data-tone="squad"] {
+  border-color: var(--vela-accent);
+  background: var(--vela-accent-soft);
+  color: var(--vela-accent);
+}
+
+/* ── 会话头部的提取入口（票 13）──────────────────────────
+ * 这一块长在**宿主自己的**会话头里，不在 Vela 面板里，因此它拿不到
+ * [data-vela-panel] 那一层色板。色板的选择器因此得把提取块也包进去（见
+ * 开头那两个选择器里的 [data-vela-extract]），否则这里的 var() 全部解不开。
+ */
+[data-vela-extract-open] {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--vela-line);
+  background: var(--vela-card);
+  color: var(--vela-text-2);
+  cursor: pointer;
+}
+
+[data-vela-extract-open]:hover {
+  background: var(--vela-hover);
+  color: var(--vela-text);
+}
+
+[data-vela-extract] {
+  width: min(420px, 90vw);
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--vela-line);
+  background: var(--vela-card);
+  box-shadow: var(--vela-card-shadow);
+  font-size: 13px;
+  color: var(--vela-text);
+}
+
+[data-vela-extract-head] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+[data-vela-extract-head] button {
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--vela-text-2);
+  cursor: pointer;
+}
+
+[data-vela-extract-note] {
+  margin: 4px 0;
+  font-size: 11px;
+  color: var(--vela-text-2);
+  /* 路径很长，得允许在任意处折，否则会把弹层撑宽。 */
+  overflow-wrap: anywhere;
+}
+
+[data-vela-extract-note][data-tone="warn"] { color: var(--vela-warn); }
+[data-vela-extract-note][data-tone="bad"] { color: var(--vela-danger); }
+
+[data-vela-extract-empty] {
+  padding: 10px 2px;
+  font-size: 12px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-extract-list] {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  /* 候选可能很多（一次长讨论能拿出二三十条），弹层本身不能无限长。 */
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+[data-vela-extract-list] li { margin: 2px 0; }
+
+[data-vela-extract-list] label {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  padding: 4px 5px;
+  border-radius: 6px;
+  cursor: pointer;
+  /* 标题会很长，换行而不是溢出去压到旁边。 */
+  overflow-wrap: anywhere;
+}
+
+[data-vela-extract-list] label:hover { background: var(--vela-hover); }
+
+[data-vela-extract-list] input { margin-top: 3px; }
+
+[data-vela-extract-foot] {
+  display: flex;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+[data-vela-extract-foot] button {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--vela-line);
+  background: var(--vela-card);
+  color: var(--vela-text);
+  cursor: pointer;
+}
+
+[data-vela-extract-create] {
+  border-color: transparent !important;
+  background: var(--vela-accent) !important;
+  /* 要用色板里的强调色字，不能硬写白色：夜间的强调色是亮靛蓝，
+     配白字读不清——色板里的 --vela-accent-text 在夜间正是深色。 */
+  color: var(--vela-accent-text) !important;
+}
+
+[data-vela-extract-foot] button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
 }
 `
 

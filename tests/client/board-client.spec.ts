@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import { createPanelState } from '../../src/client/panel-state.ts'
 import { BoardClient } from '../../src/client/board-client.ts'
 import type { FetchLike } from '../../src/client/board-client.ts'
+import { BOARD_VERSION } from '../../src/domain/types.ts'
 
 describe('panel-state', () => {
   it('初始关闭，open/close/toggle 生效', () => {
@@ -62,7 +63,7 @@ function fakeFetch(responses: readonly FetchSpec[]): FetchLike {
 }
 
 const boardBody = (issues: unknown[] = []) => ({
-  board: { version: 1, issues },
+  board: { version: BOARD_VERSION, nextNumber: issues.length + 1, issues },
   liveUsage: {},
   sandboxPresets: ['workspace-write'],
   canDispatch: true,

@@ -16,3 +16,9 @@ Multica 的价值主张之一是「团队协作与权限：工作区隔离、角
 ## Consequences
 
 Issue 上不设 assignee-to-human、角色、访问范围等字段；「派活」的对象只可能是 Agent。任何以「多人」为前提的功能请求都应先回到这份 ADR 重新评估边界。
+
+## 后续：Squad 不是对本 ADR 的让步
+
+第二期引入的 **Squad（小队）/ Member（队员）/ 权限**看上去像是把 Multica 的团队协作拾了回来，实际上正是本 ADR 第 9 行那句话的归局：主体从「团队成员」换成了「Agent」。
+
+Squad 里没有人。Member 是一个 **agent 位置**，不是账号；「权限」指的是沙箱档位与工具白名单，不是访问控制。本 ADR 的结论完全成立，且因为有了真正的多 Agent 限权而变得更硬。详见 ADR-0016（Squad 的形态）与 ADR-0017（Member 的两层闸门）。

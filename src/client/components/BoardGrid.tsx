@@ -15,6 +15,7 @@ import { canOperatorMove } from '../../domain/lanes.ts'
 import type { BoardClient } from '../board-client.ts'
 import { IssueCard } from './IssueCard.tsx'
 import { NewIssueForm } from './NewIssueForm.tsx'
+import type { SquadShape } from '../board-client.ts'
 
 const LANE_LABELS: Readonly<Record<Lane, string>> = {
   backlog: 'Backlog',
@@ -31,8 +32,14 @@ export interface BoardGridProps {
   readonly showWorkspace: boolean
   readonly defaultWorkspace: string
   readonly sandboxPresets: readonly string[]
+  /** 可选的小队，供建卡与编辑时选派给哪支队。 */
+  readonly squads: readonly SquadShape[]
   readonly canDispatch: boolean
   readonly liveUsage: Readonly<Record<string, TokenUsage>>
+  /** 详情抽屉里那张卡的 id（用于高亮）；未打开时 undefined。 */
+  readonly selectedId: string | undefined
+  /** 选中一张卡——传 undefined 关抽屉。 */
+  readonly onSelect: (id: string | undefined) => void
   /** 跳到一次执行的会话；返回 false 表示那个会话已不在列表里。 */
   readonly openSession: (sessionId: string) => boolean
   readonly client: BoardClient
@@ -167,6 +174,7 @@ function LaneColumn(props: LaneColumnProps): ReturnType<typeof createElement> {
           client: props.client,
           defaultWorkspace: props.defaultWorkspace,
           sandboxPresets: props.sandboxPresets,
+          squads: props.squads,
           onChanged: props.onChanged,
           onError,
         })]
@@ -179,8 +187,11 @@ function LaneColumn(props: LaneColumnProps): ReturnType<typeof createElement> {
         issue,
         showWorkspace: props.showWorkspace,
         sandboxPresets: props.sandboxPresets,
+        squads: props.squads,
         canDispatch: props.canDispatch,
         liveUsage: props.liveUsage[issue.id],
+        isSelected: props.selectedId === issue.id,
+        onOpenDetail: () => props.onSelect(issue.id),
         openSession: props.openSession,
         client: props.client,
         onChanged: props.onChanged,

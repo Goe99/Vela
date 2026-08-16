@@ -14,9 +14,14 @@ export interface NewIssueFormProps {
   /** 预填的 Workspace：当前筛选中的那个，否则最近用过的那个。 */
   readonly defaultWorkspace: string
   readonly sandboxPresets: readonly string[]
+  /** 可选的小队；为空时不显示选择器。 */
+  readonly squads: readonly { readonly id: string; readonly title: string }[]
   onChanged(): void | Promise<void>
   onError(message: string | undefined): void
 }
+
+/** 「不用小队」选项的哨兵值。用不可打字符，避开与真存在的小队 id 撞车。 */
+const NO_SQUAD = '\u0000none'
 
 /** 建卡表单。 */
 export function NewIssueForm(props: NewIssueFormProps): ReturnType<typeof createElement> {
@@ -25,6 +30,7 @@ export function NewIssueForm(props: NewIssueFormProps): ReturnType<typeof create
   const [batch, setBatch] = useState(false)
   const [title, setTitle] = useState('')
   const [workspace, setWorkspace] = useState(props.defaultWorkspace)
+  const [squad, setSquad] = useState(NO_SQUAD)
   const [busy, setBusy] = useState(false)
   const [local, setLocal] = useState<string | undefined>(undefined)
 
@@ -52,7 +58,11 @@ export function NewIssueForm(props: NewIssueFormProps): ReturnType<typeof create
     try {
       const result = batch || titles.length > 1
         ? await client.createBatch(path, titles)
-        : await client.createIssue({ title: titles[0]!, workspace: path })
+        : await client.createIssue({
+          title: titles[0]!,
+          workspace: path,
+          ...(squad === NO_SQUAD ? {} : { exec: { squad } }),
+        })
       if (!result.ok) {
         setLocal(result.message)
         return
@@ -117,6 +127,25 @@ export function NewIssueForm(props: NewIssueFormProps): ReturnType<typeof create
       value: workspace,
       onChange: (event: { target: { value: string } }) => setWorkspace(event.target.value),
     }),
+    // 批量模式不给小队选择：一次粘下来的一批待办很少属于同一支队，默认给全
+    // 部打上同一支队反而造成一批要逐张改回来的卡。
+    ...(batch || props.squads.length === 0
+      ? []
+      : [createElement(
+        'label',
+        { key: 'squad', style: { display: 'block' } },
+        createElement('span', { 'data-vela-hint': '' }, '派给哪支小队'),
+        createElement(
+          'select',
+          {
+            'aria-label': 'new issue squad',
+            value: squad,
+            onChange: (event: { target: { value: string } }) => setSquad(event.target.value),
+          },
+          createElement('option', { key: NO_SQUAD, value: NO_SQUAD }, '不用小队'),
+          ...props.squads.map(item => createElement('option', { key: item.id, value: item.id }, item.title)),
+        ),
+      )]),
     ...(local === undefined ? [] : [createElement('div', { key: 'err', 'data-vela-error': '' }, local)]),
     createElement(
       'div',

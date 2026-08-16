@@ -53,6 +53,7 @@ beforeEach(async () => {
     now: () => { clock += 1; return clock },
     newId: () => { seq += 1; return `i${seq}` },
     sandboxPresets: () => ['workspace-write', 'danger-full-access'],
+    platform: () => 'linux',
     dispatcher: fakeDispatcher(),
   }
 })
@@ -75,6 +76,7 @@ function withoutDispatcher(): ApiDeps {
     now: deps.now,
     newId: deps.newId,
     sandboxPresets: deps.sandboxPresets,
+    platform: deps.platform,
   }
 }
 

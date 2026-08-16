@@ -18,7 +18,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { emptyBoard } from './types.ts'
 import type { Board, Issue, Lane, Priority, Run } from './types.ts'
-import { LANES, PRIORITIES } from './types.ts'
+import { BOARD_VERSION, LANES, PRIORITIES } from './types.ts'
 
 /** 快照文件的读写失败分类。 */
 export type StoreErrorKind = 'malformed' | 'io'
@@ -56,8 +56,36 @@ function parseRun(raw: unknown, where: string): Run {
 }
 
 /**
+ * 给缺编号的 Issue 补号。顺序按 (createdAt, id) 而非文件里的位置：位置会
+ * 因为拖拽变，而这两个不会，所以同一份旧快照无论读多少次都得到同一套
+ * 编号——这让一次写回失败只是“没落盘”，而不是“下次编号就变了”。
+ *
+ * 取最小可用正整数，因此已有编号不被碰。
+ */
+function assignMissingNumbers(
+  issues: readonly Issue[],
+  numbered: ReadonlyMap<string, number>,
+): Map<string, number> {
+  const assigned = new Map(numbered)
+  const used = new Set(numbered.values())
+  const pending = issues
+    .filter(issue => !assigned.has(issue.id))
+    .sort((left, right) => (left.createdAt - right.createdAt) || left.id.localeCompare(right.id))
+  let candidate = 1
+  for (const issue of pending) {
+    while (used.has(candidate)) candidate += 1
+    assigned.set(issue.id, candidate)
+    used.add(candidate)
+  }
+  return assigned
+}
+
+/**
  * 解析一份快照。手工编辑出的错误必须报 malformed 而不是静默产出一个
  * 半损坏的 Board——Board 是 Operator 的系统记录，静默丢数据比报错更糟。
+ *
+ * 版本 1（无 Issue 编号）在此升级为当前版本。升级是**确定性**的，且不在
+ * 这里落盘；落盘由 {@link BoardStore.open} 决定，因为那里才知道磁盘上原本是什么。
  */
 export function parse(text: string): Board {
   let raw: unknown
@@ -70,13 +98,15 @@ export function parse(text: string): Board {
     throw new StoreError('malformed', 'board snapshot must be an object')
   }
   const record = raw as Record<string, unknown>
-  if (record.version !== 1) {
+  if (record.version !== 1 && record.version !== BOARD_VERSION) {
     throw new StoreError('malformed', `unsupported board version ${String(record.version)}`)
   }
   if (!Array.isArray(record.issues)) {
     throw new StoreError('malformed', 'board.issues must be an array')
   }
   const seen = new Set<string>()
+  const numbered = new Map<string, number>()
+  const usedNumbers = new Set<number>()
   const issues = record.issues.map((rawIssue: unknown, index: number): Issue => {
     const where = `board.issues[${index}]`
     if (typeof rawIssue !== 'object' || rawIssue === null) {
@@ -95,6 +125,17 @@ export function parse(text: string): Board {
     if (typeof issue.position !== 'number' || !Number.isFinite(issue.position)) {
       throw new StoreError('malformed', `${where}.position must be a finite number`)
     }
+    if (issue.number !== undefined) {
+      if (!Number.isInteger(issue.number) || (issue.number as number) < 1) {
+        throw new StoreError('malformed', `${where}.number must be a positive integer`)
+      }
+      const value = issue.number as number
+      // 重复编号直接报错而不是重新分配：编号是 Operator 对外引用的句柄，
+      // 静默改掉它比报错更危险。
+      if (usedNumbers.has(value)) throw new StoreError('malformed', `duplicate issue number ${value}`)
+      usedNumbers.add(value)
+      numbered.set(issue.id, value)
+    }
     const runs = Array.isArray(issue.runs) ? issue.runs : []
     return {
       ...(rawIssue as Issue),
@@ -104,7 +145,19 @@ export function parse(text: string): Board {
       runs: runs.map((run: unknown, runIndex: number) => parseRun(run, `${where}.runs[${runIndex}]`)),
     }
   })
-  return { version: 1, issues }
+
+  const assigned = assignMissingNumbers(issues, numbered)
+  const highest = issues.reduce((max, issue) => Math.max(max, assigned.get(issue.id) ?? 0), 0)
+  // 文件里声明的计数器优先，它才记得住已经退役的编号；但不能低于现有
+  // 最大值，否则下一张卡会和已有的撞号。
+  const declared = typeof record.nextNumber === 'number' && Number.isInteger(record.nextNumber)
+    ? record.nextNumber
+    : 0
+  return {
+    version: BOARD_VERSION,
+    nextNumber: Math.max(declared, highest + 1),
+    issues: issues.map(issue => ({ ...issue, number: assigned.get(issue.id)! })),
+  }
 }
 
 /** fsync 一个 POSIX 目录，让刚 rename 出来的条目崩溃可幸存。 */
@@ -154,7 +207,12 @@ export class BoardStore {
   }
 
   /**
-   * 打开（读取或懒创建）一份快照。
+   * 打开（读取或懒创建）一份快照。读到的内容经规范化后与磁盘不一致时
+   * （最典型的是版本 1 的旧快照被补上了 Issue 编号），立即写回一次。
+   *
+   * 写回失败**不**阻止打开：升级是确定性的，下次读会得到完全相同的结果，
+   * 所以没落盘的后果只是“每次启动都重做一次”，而不是数据飘。拿不到写权限
+   * 时 Board 仍然完全可读，这比直接报错打不开强。
    * @param path - 绝对文件路径。相对路径直接拒绝，避免 cwd 依赖。
    */
   static async open(path: string): Promise<BoardStore> {
@@ -170,7 +228,18 @@ export class BoardStore {
       }
       // 文件不存在 = 空 Board；物化推迟到第一次写入。
     }
-    return new BoardStore(path, text === undefined ? emptyBoard() : parse(text))
+    if (text === undefined) return new BoardStore(path, emptyBoard())
+    const board = parse(text)
+    const canonical = serialize(board)
+    if (canonical !== text) {
+      try {
+        await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+        await writeAtomic(path, canonical)
+      } catch {
+        // 故意吞下：见上方说明。
+      }
+    }
+    return new BoardStore(path, board)
   }
 
   /** 当前快照。 */

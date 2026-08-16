@@ -71,6 +71,16 @@ export interface Run {
 export interface ExecOverrides {
   readonly agentPreset?: string
   /**
+   * 派给哪支 Squad，值是 Squad 的 id。缺省 = 派单个 Agent。
+   *
+   * 一支 Squad 本质上就是一份 agent preset（ADR-0016），所以它和
+   * `agentPreset` 最终作用到同一个旋钮上——两者**互斥**。分两个字段
+   * 而不是共用 `agentPreset`，是因为「Operator 选了一支小队」与「Operator
+   * 选了一份裸 preset」在行为上真的不同：前者要画并行时间轴、要发号牌
+   * 限队员并发，后者两者都不适用。把区别存起来比从 preset 名字反推可靠。
+   */
+  readonly squad?: string
+  /**
    * 权限 preset 的**名字**，不是 sandbox 档位取值。DSH 把权限建模为一张
    * 可配置的 preset 表，每项绑定一对 (sandbox, approval)；默认表里名字恰好
    * 与 sandbox 档位同名（workspace-write / danger-full-access），但部署可以
@@ -83,6 +93,12 @@ export interface ExecOverrides {
 /** Board 上的一张卡片。寿命长于它的任何一次 Run。 */
 export interface Issue {
   readonly id: string
+  /**
+   * 稳定可引用的编号（`V-12` 里的 12）。在一份 Board 内单调递增且
+   * **从不复用**——删掉一张卡后它的编号随之退役，否则“我刚说的 V-12”
+   * 会在不同时间指向不同的事。计数器存在 Board 上，不从现有卡反推。
+   */
+  readonly number: number
   readonly title: string
   readonly description: string
   /** 被指派工作的代码库根目录（绝对路径）。 */
@@ -100,13 +116,32 @@ export interface Issue {
   readonly runs: readonly Run[]
 }
 
+/** 当前快照版本。版本 1 没有 Issue 编号，读取时自动补齐。 */
+export const BOARD_VERSION = 2
+
 /** Board 的完整快照——Vela 唯一拥有的持久状态。 */
 export interface Board {
-  readonly version: 1
+  readonly version: typeof BOARD_VERSION
+  /**
+   * 下一张卡要拿的编号。存下来而不从 `max(issues.number)` 反推，否则
+   * 删掉最后一张卡后下一张会拿到同一个编号。
+   */
+  readonly nextNumber: number
   readonly issues: readonly Issue[]
 }
 
 /** 一个空 Board。 */
 export function emptyBoard(): Board {
-  return { version: 1, issues: [] }
+  return { version: BOARD_VERSION, nextNumber: 1, issues: [] }
+}
+
+/**
+ * 编号的前缀。抽成常量因为搜索要反向认它（「V-12」与「12」得是同一个意图），
+ * 而两处各写一份字面量早晚会分家。
+ */
+export const ISSUE_NUMBER_PREFIX = 'V-'
+
+/** 编号的展示形式。单一出处，免得前后端各拼一份。 */
+export function formatIssueNumber(value: number): string {
+  return `${ISSUE_NUMBER_PREFIX}${value}`
 }
