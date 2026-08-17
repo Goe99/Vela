@@ -13,6 +13,7 @@ import { createElement, useState } from 'react'
 import type { BoardClient, SquadShape } from '../board-client.ts'
 import { DEFAULT_MAX_PARALLEL_MEMBERS } from '../../domain/squad.ts'
 import { CreateSquadDialog } from './CreateSquadDialog.tsx'
+import { avatarChar, memberHue } from './MemberEditor.tsx'
 import { SquadDetail } from './SquadDetail.tsx'
 
 /** 小队页的 props。 */
@@ -128,14 +129,22 @@ export function SquadsPage(props: SquadsPageProps): ReturnType<typeof createElem
             if (event.key === 'Enter' || event.key === ' ') setView({ kind: 'detail', id: squad.id })
           },
         },
-        createElement('div', { 'data-vela-squad-title': '' }, squad.title),
-        createElement(
-          'div',
-          { 'data-vela-squad-meta': '' },
-          createElement('span', { 'data-vela-chip': '' }, `${squad.members.length} 名队员`),
-          createElement('span', { 'data-vela-chip': '' }, `同时最多 ${squad.maxParallelMembers} 个在跑`),
-          createElement('span', { 'data-vela-chip': '' },
-            squad.sandbox === undefined ? '档位沿用默认' : squad.sandbox),
+        createElement('span', {
+          'data-vela-avatar': '',
+          'data-hue': String(memberHue(squad.title)),
+          'aria-hidden': 'true',
+        }, avatarChar(squad.title)),
+        createElement('div', { 'data-vela-squad-main': '' },
+          createElement('div', { 'data-vela-squad-title': '' }, squad.title),
+          createElement(
+            'div',
+            { 'data-vela-squad-meta': '' },
+            // 计数把队长算进去，与详情页的「成员」tab 口径一致。
+            createElement('span', { 'data-vela-chip': '' }, `${squad.members.length + 1} 名成员`),
+            createElement('span', { 'data-vela-chip': '' }, `同时最多 ${squad.maxParallelMembers} 个在跑`),
+            createElement('span', { 'data-vela-chip': '' },
+              squad.sandbox === undefined ? '档位沿用默认' : squad.sandbox),
+          ),
         ),
         // 删除收成右上角的小图标；点它不进详情。
         createElement('button', {

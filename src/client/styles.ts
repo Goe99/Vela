@@ -75,6 +75,16 @@ const CSS = `
   --vela-hover: #e6ecf5;
   /* 弹窗遮罩 */
   --vela-scrim: rgba(21, 32, 46, .38);
+  /* 输入框的凹槽底色：比卡片深一点，形成「凹进去」的层次 */
+  --vela-inset: #edf0f7;
+  /* 字母徽的六色盘：同一个名字永远同一个色，日夜共用（饱和度够，白字上都成立） */
+  --vela-avatar-0: #4f6fd8;
+  --vela-avatar-1: #7c5cd6;
+  --vela-avatar-2: #2f9264;
+  --vela-avatar-3: #c47b1e;
+  --vela-avatar-4: #c94f7c;
+  --vela-avatar-5: #2a8fa0;
+  --vela-avatar-text: #ffffff;
   --vela-card-shadow: 0 1px 2px rgba(21, 44, 92, .07), 0 1px 3px rgba(21, 44, 92, .05);
   --vela-scroll: #c9d4e5;
   --vela-scroll-hover: #adbdd4;
@@ -119,6 +129,16 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   --vela-hover: #272e3b;
   /* 弹窗遮罩 */
   --vela-scrim: rgba(0, 0, 0, .55);
+  /* 输入框的凹槽底色：深色界面的输入框要比所在表面更深，不是更亮 */
+  --vela-inset: #141821;
+  /* 字母徽六色盘与日间同值 */
+  --vela-avatar-0: #4f6fd8;
+  --vela-avatar-1: #7c5cd6;
+  --vela-avatar-2: #2f9264;
+  --vela-avatar-3: #c47b1e;
+  --vela-avatar-4: #c94f7c;
+  --vela-avatar-5: #2a8fa0;
+  --vela-avatar-text: #ffffff;
   /* 夜间不需要阴影抬升：亮度差本身就够了 */
   --vela-card-shadow: none;
   --vela-scroll: #313a4b;
@@ -1101,16 +1121,18 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 }
 
 /* 队员卡：紧凑的四行布局（名字行 / 职责 / 能力 / 白名单小字），
-   不再是每个字段独占一行的九层高卡。 */
+   不再是每个字段独占一行的九层高卡。背景提到卡片色——比页面亮一档，
+   与输入框的凹槽底（更深）拉开层次。 */
 [data-vela-member] {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  margin-bottom: 8px;
+  gap: 7px;
+  padding: 10px 12px;
+  margin-bottom: 9px;
   border: 1px solid var(--vela-line-soft);
-  border-radius: 7px;
-  background: var(--vela-lane);
+  border-radius: 8px;
+  background: var(--vela-card);
+  box-shadow: var(--vela-card-shadow);
 }
 
 /* 短字段限宽：名字吃掉剩余宽度，后端与移除按钮挤在行尾。特异性要盖过
@@ -1118,7 +1140,7 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 [data-vela-member-head] {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 [data-vela-member-head] input {
@@ -1140,6 +1162,97 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   font-size: 11px;
   color: var(--vela-text-3);
   overflow-wrap: anywhere;
+}
+
+/* ── 小队界面的质感层 ─────────────────────────────────── */
+
+/* 详情页与创建弹窗里的输入框用凹槽底色：深色界面里输入框要比所在表面
+   更深（凹进去），不是更亮——之前输入框与卡片同一个色，整个表单糊成一片。 */
+[data-vela-panel] [data-vela-squad-detail] input,
+[data-vela-panel] [data-vela-squad-detail] select,
+[data-vela-panel] [data-vela-squad-detail] textarea,
+[data-vela-panel] [data-vela-modal] input,
+[data-vela-panel] [data-vela-modal] textarea {
+  background: var(--vela-inset);
+}
+
+[data-vela-panel] [data-vela-squad-detail] input:focus,
+[data-vela-panel] [data-vela-squad-detail] select:focus,
+[data-vela-panel] [data-vela-squad-detail] textarea:focus,
+[data-vela-panel] [data-vela-modal] input:focus,
+[data-vela-panel] [data-vela-modal] textarea:focus {
+  border-color: var(--vela-accent);
+}
+
+/* 字母徽：名字的缩略圆。同一个名字永远同一个色（按名字哈希），
+   在列表、详情、时间轴里扫一眼就认出「这个人」。 */
+[data-vela-avatar] {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vela-avatar-text);
+  background: var(--vela-avatar-0);
+  user-select: none;
+}
+
+[data-vela-avatar][data-hue='0'] { background: var(--vela-avatar-0); }
+[data-vela-avatar][data-hue='1'] { background: var(--vela-avatar-1); }
+[data-vela-avatar][data-hue='2'] { background: var(--vela-avatar-2); }
+[data-vela-avatar][data-hue='3'] { background: var(--vela-avatar-3); }
+[data-vela-avatar][data-hue='4'] { background: var(--vela-avatar-4); }
+[data-vela-avatar][data-hue='5'] { background: var(--vela-avatar-5); }
+[data-vela-avatar][data-hue='leader'] { background: var(--vela-accent); }
+
+/* 队长卡：成员列表最前面那张。左边一条 accent 竖条 + 徽章——
+   它不是 members 数组里的一条，但界面上它必须可见：小队里「有谁」，
+   队长不该隐身。 */
+[data-vela-leader] {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--vela-line-soft);
+  border-left: 3px solid var(--vela-accent);
+  border-radius: 8px;
+  background: var(--vela-card);
+  box-shadow: var(--vela-card-shadow);
+}
+
+[data-vela-leader-name] {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+[data-vela-leader-badge] {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--vela-accent-soft);
+  color: var(--vela-accent);
+}
+
+/* 队长卡里的能力是只读展示（来自基准 preset，这里改不了），
+   不要让鼠标悬停给出「可点」的错觉。 */
+[data-vela-abilities][data-readonly] [data-vela-ability] span {
+  cursor: default;
+}
+
+/* 列表行：字母徽 + 主体（标题与标签纵向） + 删除。 */
+[data-vela-squad-main] {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 [data-vela-abilities] {

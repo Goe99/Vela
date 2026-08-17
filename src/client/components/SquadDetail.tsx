@@ -92,10 +92,14 @@ export function SquadDetail(props: SquadDetailProps): ReturnType<typeof createEl
   }
 
   const tabs: readonly { key: Tab; label: string }[] = [
-    { key: 'members', label: `成员 ${draft.members.length}` },
+    // 计数把队长算进去：在 Operator 眼里队长就是成员之一（Multica 也这么数）。
+    { key: 'members', label: `成员 ${draft.members.length + 1}` },
     { key: 'instructions', label: '职责说明' },
     { key: 'settings', label: '设置' },
   ]
+
+  /** 队长固定拿着的能力。只读展示——它们来自基准 preset，不在小队层面改。 */
+  const LEADER_ABILITIES = ['读文件', '改文件', '跑命令', '联网', '委派队员'] as const
 
   return createElement(
     'div',
@@ -150,11 +154,42 @@ export function SquadDetail(props: SquadDetailProps): ReturnType<typeof createEl
           'div',
           { 'data-vela-squad-head': '' },
           createElement('div', { 'data-vela-hint': '' },
-            `该小队有 ${draft.members.length} 名队员。每个队员各自决定能用哪几类工具（这是队员级，跟「设置」里的队级档位不是一回事）。`),
+            '队长接收派给这支队的第一手任务，再按职责分给队员。工具是队员级的——每个队员只能用自己那几类（跟「设置」里的队级档位不是一回事）。'),
           createElement('button', {
             type: 'button',
             onClick: () => patch({ members: [...draft.members, newMember(draft.members.length)] }),
           }, '+ 加一个队员'),
+        ),
+        // 队长卡：永远在成员列表最前面。它不是 members 数组里的一条——队长就是
+        // 基准 preset 扮演的角色，它的配置就是那段职责说明（draft.instruction）。
+        // 但界面把它摆出来：小队里"有谁"这件事，队长不该隐身。
+        createElement(
+          'div',
+          { 'data-vela-leader': '' },
+          createElement(
+            'div',
+            { 'data-vela-member-head': '' },
+            createElement('span', { 'data-vela-avatar': '', 'data-hue': 'leader', 'aria-hidden': 'true' }, '队'),
+            createElement('span', { 'data-vela-leader-name': '' }, '队长'),
+            createElement('span', { 'data-vela-leader-badge': '' }, 'LEADER'),
+          ),
+          createElement('textarea', {
+            'data-vela-member-instruction': '',
+            value: draft.instruction,
+            rows: 2,
+            placeholder: '队长的常驻职责：这支队负责什么、怎么拆活、什么算做完。',
+            'aria-label': '队长职责',
+            onChange: (event: { target: { value: string } }) => patch({ instruction: event.target.value }),
+          }),
+          createElement(
+            'div',
+            { 'data-vela-abilities': '', 'data-readonly': '' },
+            ...LEADER_ABILITIES.map(label =>
+              createElement('span', { key: label, 'data-vela-ability': label, 'data-on': 'true' },
+                createElement('span', null, label))),
+          ),
+          createElement('div', { 'data-vela-member-tools': '' },
+            '队长拿全部能力——安全边界设在队员身上：每个队员只能用自己白名单里的工具。'),
         ),
         ...(draft.members.length === 0
           ? [createElement('div', { key: 'none', 'data-vela-empty': '' },

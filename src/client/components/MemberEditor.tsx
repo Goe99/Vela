@@ -21,16 +21,39 @@ export interface MemberEditorProps {
   readonly onRemove: () => void
 }
 
+/**
+ * 队员字母徽的色相：按名字哈希到六色之一。
+ *
+ * 同一个名字永远同一个色——视觉上「这个人」就有了稳定的色彩身份，
+ * 列表和时间轴里扫一眼就能认出来。
+ */
+export function memberHue(name: string): number {
+  let hash = 0
+  for (const ch of name) hash = (hash * 31 + (ch.codePointAt(0) ?? 0)) % 997
+  return hash % 6
+}
+
+/** 字母徽上显示的字符：英文取首字母大写，中文取第一个字。 */
+export function avatarChar(name: string): string {
+  const first = [...name][0] ?? '?'
+  return /^[a-z]$/.test(first) ? first.toUpperCase() : first
+}
+
 /** 单个队员的编辑卡片。 */
 export function MemberEditor(props: MemberEditorProps): ReturnType<typeof createElement> {
   const { member, onPatch, onRemove, platform } = props
   return createElement(
     'div',
     { 'data-vela-member': member.name },
-    // 第一行：名字 + 后端 + 移除图标（右上角）。
+    // 第一行：字母徽 + 名字 + 后端 + 移除图标（右上角）。
     createElement(
       'div',
       { 'data-vela-member-head': '' },
+      createElement('span', {
+        'data-vela-avatar': '',
+        'data-hue': String(memberHue(member.name)),
+        'aria-hidden': 'true',
+      }, avatarChar(member.name)),
       createElement('input', {
         'data-vela-member-name': '',
         value: member.name,

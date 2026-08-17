@@ -324,7 +324,7 @@ describe('SquadsPage', () => {
   it('列出已有的小队，带队员数与号牌数', () => {
     const html = renderToStaticMarkup(createElement(SquadsPage, pageProps({ squads: [squad] })))
     assert.ok(html.includes('data-vela-squad-row="vela-backend"'))
-    assert.ok(html.includes('1 名队员'))
+    assert.ok(html.includes('2 名成员'), '队员数要把队长算进去——与详情页成员 tab 的口径一致')
     assert.ok(html.includes('同时最多 2 个在跑'))
   })
 
