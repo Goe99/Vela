@@ -143,6 +143,21 @@ export function IssueCard(props: IssueCardProps): ReturnType<typeof createElemen
         onClick: () => props.onOpenDetail(),
         'aria-label': `打开 ${formatIssueNumber(issue.number)} 的详情`,
       }, issue.title),
+      // 删除放在头部右上角：一个安静的小图标，而不是和「派活」一样大、一样显眼的
+      // 文字按钮。原来六七个同尺寸按钮挤在卡片底部，没有一个看得出哪个是主操作，
+      // 而且误点删除的代价最高却和「编辑」排在一起。挪开后操作行只剩干活相关的动作。
+      ...(issue.lane === 'running'
+        ? []
+        : [createElement('button', {
+          key: 'del',
+          type: 'button',
+          disabled: busy,
+          'data-vela-icon-btn': '',
+          'data-tone': 'danger',
+          'aria-label': `删除 ${formatIssueNumber(issue.number)} ${issue.title}`,
+          title: '删除',
+          onClick: () => void act(() => client.deleteIssue(issue.id)),
+        }, '✕')]),
     ),
     createElement(
       'div',
@@ -247,20 +262,13 @@ export function IssueCard(props: IssueCardProps): ReturnType<typeof createElemen
           }, '退回'),
         ]
         : []),
+      // 删除已挪到头部右上角（图标按钮）。这里只剩编辑。
       ...(issue.lane === 'running'
         ? []
         : [
           createElement('button', {
             key: 'edit', type: 'button', disabled: busy, onClick: () => setEditing(true),
           }, '编辑'),
-          createElement('button', {
-            key: 'del',
-            type: 'button',
-            disabled: busy,
-            'data-tone': 'danger',
-            'aria-label': `删除 ${formatIssueNumber(issue.number)} ${issue.title}`,
-            onClick: () => void act(() => client.deleteIssue(issue.id)),
-          }, '删除'),
         ]),
     ),
   )

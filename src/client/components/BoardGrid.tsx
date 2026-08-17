@@ -26,6 +26,22 @@ const LANE_LABELS: Readonly<Record<Lane, string>> = {
   failed: 'Failed',
 }
 
+/**
+ * 每列的状态符号，显示在列名前面。用 unicode 而不是图标库，保持零依赖。
+ *
+ * 形状跟着语义走：空心是「还没排上」，实心是「准备好了」，三角是「正在进行」，
+ * 半圆是「等一个判断」，勾与叉是两种终局。形状与颜色**双重**编码——只靠颜色时，
+ * 色弱的人分不清「进行中」和「待验收」。
+ */
+const LANE_ICONS: Readonly<Record<Lane, string>> = {
+  backlog: '○',
+  todo: '●',
+  running: '▶',
+  review: '◐',
+  done: '✓',
+  failed: '✕',
+}
+
 /** BoardGrid 的 props。 */
 export interface BoardGridProps {
   readonly issues: readonly Issue[]
@@ -161,6 +177,7 @@ function LaneColumn(props: LaneColumnProps): ReturnType<typeof createElement> {
     createElement(
       'h3',
       { 'data-vela-lane-head': '' },
+      createElement('span', { 'data-vela-lane-icon': '', 'aria-hidden': 'true' }, LANE_ICONS[lane]),
       LANE_LABELS[lane],
       createElement('span', { 'data-vela-count': '' }, String(issues.length)),
     ),

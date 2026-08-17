@@ -36,11 +36,17 @@ const CSS = `
 [data-vela-extract],
 [data-vela-extract-open] {
   /* 画布：面板底色，比泳道暗一档，让泳道浮出来 */
-  --vela-canvas: #eef1f6;
+  --vela-canvas: #e4e9f2;
   /* 泳道底色 */
   --vela-lane: #f7f9fc;
-  /* 泳道标题带：比泳道体再暗一点，让每列有个"头" */
-  --vela-lane-head: #edf1f7;
+  /* 六列各自的淡色泳道。backlog 最中性（还没排上），往后各有色彩身份：
+     todo 蓝、running 琥珀、review 紫、done 绿、failed 红。 */
+  --vela-lane-backlog: #edeef2;
+  --vela-lane-todo: #e6edfa;
+  --vela-lane-running: #faf1de;
+  --vela-lane-review: #efebfa;
+  --vela-lane-done: #e4f3ea;
+  --vela-lane-failed: #faeaea;
   /* 卡片：日间纯白 + 轻阴影，浮在泳道上 */
   --vela-card: #ffffff;
   /* 主分隔线（泳道边框） */
@@ -55,6 +61,9 @@ const CSS = `
   --vela-accent-hover: #2b49bd;
   --vela-accent-text: #ffffff;
   --vela-accent-soft: #e8edfd;
+  /* 待验收的标识色：紫色，与进行中（琥珀）和完成（绿）都拉开 */
+  --vela-purple: #6d4fc4;
+  --vela-ok: #1f9d66;
   --vela-danger: #d33a4b;
   --vela-danger-soft: #fdeff1;
   --vela-warn: #a55a00;
@@ -64,6 +73,8 @@ const CSS = `
   --vela-info: #1f6f8f;
   --vela-info-soft: #e4f2f8;
   --vela-hover: #e6ecf5;
+  /* 弹窗遮罩 */
+  --vela-scrim: rgba(21, 32, 46, .38);
   --vela-card-shadow: 0 1px 2px rgba(21, 44, 92, .07), 0 1px 3px rgba(21, 44, 92, .05);
   --vela-scroll: #c9d4e5;
   --vela-scroll-hover: #adbdd4;
@@ -77,8 +88,14 @@ body[data-ds-dark-theme] [data-vela-nav],
 body[data-ds-dark-theme] [data-vela-extract],
 body[data-ds-dark-theme] [data-vela-extract-open] {
   --vela-canvas: #101319;
-  --vela-lane: #171b23;
-  --vela-lane-head: #1c212b;
+  --vela-lane: #1a1f2a;
+  /* 六列淡色泳道的夜间版：同一套色相，压暗到刚好能辨 */
+  --vela-lane-backlog: #171a21;
+  --vela-lane-todo: #16202e;
+  --vela-lane-running: #251e13;
+  --vela-lane-review: #1e1930;
+  --vela-lane-done: #15251c;
+  --vela-lane-failed: #2a1618;
   /* 卡片比泳道亮一档。早期取 #212734，与泳道只差十几个度——浏览器里
      实测确认卡片基本浮不起来。 */
   --vela-card: #262e3d;
@@ -91,6 +108,8 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   --vela-accent-hover: #7290fa;
   --vela-accent-text: #0b0e13;
   --vela-accent-soft: #1e2740;
+  --vela-purple: #9d84f0;
+  --vela-ok: #57c98a;
   --vela-danger: #ff7f88;
   --vela-danger-soft: #2c1b20;
   --vela-warn: #f0b959;
@@ -98,6 +117,8 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   --vela-info: #6ec5e0;
   --vela-info-soft: #142a33;
   --vela-hover: #272e3b;
+  /* 弹窗遮罩 */
+  --vela-scrim: rgba(0, 0, 0, .55);
   /* 夜间不需要阴影抬升：亮度差本身就够了 */
   --vela-card-shadow: none;
   --vela-scroll: #313a4b;
@@ -231,15 +252,15 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   min-height: 0;
   display: grid;
   /*
-   * 六列等宽。最小列宽必须让六列在常见窗口里**一次放下**——「一眼看全」是这个
-   * 看板的全部意义，一旦第六列被挤出屏幕，Failed 里的卡片就等于不存在。
-   * 176px × 6 + 间距 + 内边距 ≈ 1116px，覆盖 1152 及更宽的窗口；更窄时才横向
-   * 滚动，而不是把列压到读不了。
+   * 六列等宽。最小列宽要让一张卡读得下去（编号 + 不憋屈的标题 + 操作区），
+   * 取 240px；剩余空间按 1fr 在各列间等比分配。六列总宽约 1544px，常见
+   * 全屏（≥1600）能一屏放下；更窄的窗口就横向滚动，而不是把列压到读不了——
+   * 「一眼看全」重要，但「每列读得下去」同样重要。
    */
   grid-auto-flow: column;
-  grid-auto-columns: minmax(176px, 1fr);
-  gap: 8px;
-  padding: 10px;
+  grid-auto-columns: minmax(240px, 1fr);
+  gap: 10px;
+  padding: 12px;
   overflow-x: auto;
   overflow-y: hidden;
   align-items: stretch;
@@ -251,9 +272,21 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   min-height: 0;
   border: 1px solid var(--vela-line);
   border-radius: 8px;
-  background: var(--vela-lane);
+  /* 泳道体用这一列自己的淡色；没设 --lane-tint 的（比如时间轴的行）回落到默认泳道色。 */
+  background: var(--lane-tint, var(--vela-lane));
   overflow: hidden;
 }
+
+/* 六列各自的色彩身份。--lane-tint 是泳道体的淡底色，--lane-accent 是列标识色
+   （列头符号、数字徽章）。用属性值选择器，只命中泳道列，不碰时间轴的行
+   （那个钩子没值）。
+   待验收用紫色：它是「等 Operator 判断」，跟进行中的琥珀、完成的绿都要拉开。 */
+[data-vela-lane="backlog"] { --lane-tint: var(--vela-lane-backlog); --lane-accent: var(--vela-text-3); }
+[data-vela-lane="todo"] { --lane-tint: var(--vela-lane-todo); --lane-accent: var(--vela-accent); }
+[data-vela-lane="running"] { --lane-tint: var(--vela-lane-running); --lane-accent: var(--vela-warn); }
+[data-vela-lane="review"] { --lane-tint: var(--vela-lane-review); --lane-accent: var(--vela-purple); }
+[data-vela-lane="done"] { --lane-tint: var(--vela-lane-done); --lane-accent: var(--vela-ok); }
+[data-vela-lane="failed"] { --lane-tint: var(--vela-lane-failed); --lane-accent: var(--vela-danger); }
 
 [data-vela-lane-head] {
   display: flex;
@@ -261,18 +294,27 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   gap: 6px;
   margin: 0;
   padding: 8px 10px;
-  background: var(--vela-lane-head);
+  /* 不再是一条比泳道暗的实色带——那跟泳道体颜色太接近，看起来像一块贴上去的
+     补丁。改成透明，让列头融进泳道自身的淡色里，靠下边框轻轻分开。 */
+  background: transparent;
   border-bottom: 1px solid var(--vela-line-soft);
   font-size: 12px;
   font-weight: 600;
-  color: var(--vela-text-2);
+  color: var(--vela-text);
   flex: 0 0 auto;
 }
 
+/* 列头前面的状态符号，用这一列的标识色。 */
+[data-vela-lane-icon] {
+  color: var(--lane-accent);
+  font-size: 12px;
+  line-height: 1;
+}
+
 [data-vela-count] {
-  font-weight: 400;
-  color: var(--vela-text-3);
-  background: var(--vela-canvas);
+  font-weight: 600;
+  color: var(--lane-accent);
+  background: var(--vela-card);
   border-radius: 999px;
   padding: 0 6px;
   min-width: 18px;
@@ -340,6 +382,30 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   display: flex;
   align-items: baseline;
   gap: 6px;
+}
+
+/* 头部右上角的小图标按钮（删除）：安静透明，悬停才露出颜色。特异性要盖过
+   面板里通用的 [data-vela-panel] button，所以带上面板前缀。 */
+[data-vela-panel] [data-vela-icon-btn] {
+  flex: none;
+  align-self: flex-start;
+  padding: 1px 5px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--vela-text-3);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+[data-vela-panel] [data-vela-icon-btn]:hover:not(:disabled) {
+  background: var(--vela-hover);
+  color: var(--vela-text);
+}
+
+[data-vela-panel] [data-vela-icon-btn][data-tone='danger']:hover:not(:disabled) {
+  background: var(--vela-danger-soft);
+  color: var(--vela-danger);
 }
 
 [data-vela-number] {
@@ -418,11 +484,26 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 [data-vela-actions] {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 1px;
+  gap: 6px;
+  margin-top: 2px;
 }
 
-[data-vela-actions] button { font-size: 12px; padding: 2px 8px; }
+/* 操作按钮给一个够得着的点击面；实心主操作吃掉剩余宽度，成为视觉主导。 */
+[data-vela-actions] button {
+  font-size: 12px;
+  padding: 4px 10px;
+  min-block-size: 30px;
+}
+
+[data-vela-actions] button[data-tone='primary'] {
+  flex: 1 1 auto;
+}
+
+/* 卡片整卡是抓取手型（可拖），但按钮上悬停必须是指针——
+   否则每个按钮都显示成「拖走」，点与不点分不清。 */
+[data-vela-card] button {
+  cursor: pointer;
+}
 
 /* 进行中的卡片：靛蓝描边 + 同色脉动，与主操作色一致 */
 [data-vela-card][data-lane='running'] { border-color: var(--vela-accent); }
@@ -503,7 +584,9 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 /* ── 窄屏与降低动效 ─────────────────────────────────────── */
 
 @media (max-width: 720px) {
-  [data-vela-grid] { grid-auto-columns: minmax(200px, 84vw); }
+  /* 窄屏一列一列看：列占大部分可见宽度，横滑看下一列。下限与主规则一致
+     （240px），不能比它还低——否则窄窗口反而比宽窗口更挤，那就反了。 */
+  [data-vela-grid] { grid-auto-columns: minmax(240px, 84vw); }
 }
 
 /* 横向滚动条：六列放不下时它是唯一的线索，不能藏起来。 */
@@ -574,7 +657,7 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 
 [data-vela-lane-member] {
   font-weight: 600;
-  color: var(--vela-text-1);
+  color: var(--vela-text);
 }
 
 /* 任务描述可能很长。单行截断而不换行：泳道高度不齐会让重叠关系变难读。
@@ -758,7 +841,7 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 
 [data-vela-field-value] {
   flex: 1 1 auto;
-  color: var(--vela-text-1);
+  color: var(--vela-text);
   word-break: break-all;
 }
 
@@ -818,7 +901,7 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   flex: 1 1 auto;
   font: inherit;
   text-align: left;
-  color: var(--vela-text-1);
+  color: var(--vela-text);
   word-break: break-word;
 }
 
@@ -1017,31 +1100,137 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   border-left: 3px solid var(--vela-accent);
 }
 
+/* 队员卡：紧凑的四行布局（名字行 / 职责 / 能力 / 白名单小字），
+   不再是每个字段独占一行的九层高卡。 */
 [data-vela-member] {
-  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
   margin-bottom: 8px;
-  border: 1px dashed var(--vela-line);
-  border-radius: 6px;
+  border: 1px solid var(--vela-line-soft);
+  border-radius: 7px;
   background: var(--vela-lane);
+}
+
+/* 短字段限宽：名字吃掉剩余宽度，后端与移除按钮挤在行尾。特异性要盖过
+   面板里通用的 [data-vela-panel] input { width:100% }，所以从 member-head 选。 */
+[data-vela-member-head] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+[data-vela-member-head] input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+[data-vela-member-head] select {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+[data-vela-member-instruction] {
+  width: 100%;
+}
+
+[data-vela-member-tools] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+  overflow-wrap: anywhere;
 }
 
 [data-vela-abilities] {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
+  gap: 6px;
   align-items: center;
-  margin: 5px 0;
 }
 
+/* 能力是可点的 chip：checkbox 视觉隐藏（键盘与语义保留），span 做成 chip。
+   选中的实心高亮，没选的描边——一眼看出这个队员能用哪几类。 */
 [data-vela-ability] {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  position: relative;
+  display: inline-flex;
 }
 
 [data-vela-ability] input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+
+[data-vela-ability] span {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--vela-line);
+  background: var(--vela-card);
+  color: var(--vela-text-2);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+[data-vela-ability]:hover span {
+  border-color: var(--vela-accent);
+}
+
+[data-vela-ability][data-on="true"] span {
+  background: var(--vela-accent);
+  border-color: var(--vela-accent);
+  color: var(--vela-accent-text);
+  font-weight: 500;
+}
+
+[data-vela-ability] input:focus-visible + span {
+  outline: 2px solid var(--vela-accent);
+  outline-offset: 1px;
+}
+
+/* 整支队的设置：几个短字段并排，不再一个占一行。 */
+[data-vela-field-row] {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+[data-vela-field-row] label {
+  flex: 0 1 auto;
+  margin: 4px 0;
+}
+
+[data-vela-field-row] select,
+[data-vela-field-row] input {
   width: auto;
+  min-width: 0;
+}
+
+/* 名册默认折叠成一行，点开才看。 */
+[data-vela-roster-fold] {
+  margin-top: 6px;
+}
+
+[data-vela-roster-fold] summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--vela-text-2);
+  user-select: none;
+}
+
+[data-vela-roster-fold] summary:hover {
+  color: var(--vela-accent);
+}
+
+/* 编辑器顶部的小队名字：短输入，不撑满整行。 */
+[data-vela-squad-editor] > label > input {
+  max-width: 340px;
 }
 
 /* 队长实际收到的名册：只读展示，要看得出是自动生成的。 */
@@ -1070,6 +1259,151 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 [data-vela-squads] textarea {
   resize: vertical;
   font-family: inherit;
+}
+
+/* ── 小队：创建弹窗与详情页 ─────────────────────────────── */
+
+/* 遮罩：盖在整个面板上，点外面关闭。 */
+[data-vela-modal-backdrop] {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--vela-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+[data-vela-modal] {
+  width: min(560px, 100%);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  border: 1px solid var(--vela-line);
+  background: var(--vela-card);
+  box-shadow: var(--vela-card-shadow);
+}
+
+[data-vela-modal-head] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--vela-line);
+  font-size: 14px;
+}
+
+[data-vela-modal-body] {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+[data-vela-modal-field] {
+  display: block;
+  margin: 10px 0;
+  font-size: 12px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-modal-field] input,
+[data-vela-modal-field] textarea {
+  margin-top: 4px;
+}
+
+[data-vela-modal-foot] {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--vela-line);
+}
+
+/* 详情页 */
+[data-vela-squad-detail] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  max-width: 760px;
+}
+
+[data-vela-detail-head] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+[data-vela-back] {
+  flex: 0 0 auto;
+}
+
+/* 小队名字做成像标题的输入：平时无边框，悬停/聚焦才露出可编辑。特异性盖过通用 input。 */
+[data-vela-panel] input[data-vela-detail-title] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--vela-text);
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+[data-vela-panel] input[data-vela-detail-title]:hover {
+  border-color: var(--vela-line);
+  background: var(--vela-card);
+}
+
+[data-vela-panel] input[data-vela-detail-title]:focus {
+  border-color: var(--vela-accent);
+  background: var(--vela-card);
+}
+
+/* tab 条：按钮做成下划线式，不是通用按钮的卡片样式。特异性盖过 [data-vela-panel] button。 */
+[data-vela-tabs] {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--vela-line);
+  margin-bottom: 12px;
+}
+
+[data-vela-panel] [data-vela-tabs] button {
+  border: none;
+  background: transparent;
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--vela-text-2);
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  margin-bottom: -1px;
+}
+
+[data-vela-panel] [data-vela-tabs] button:hover:not(:disabled) {
+  color: var(--vela-text);
+  background: transparent;
+}
+
+[data-vela-panel] [data-vela-tabs] button[data-active="true"] {
+  color: var(--vela-accent);
+  border-bottom-color: var(--vela-accent);
+  font-weight: 600;
+}
+
+[data-vela-detail-body] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+[data-vela-detail-foot] {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vela-line);
+  margin-top: 12px;
 }
 
 /* 小队签：与其余 chip 区分开，一眼看得出这张卡背后是一队而不是一人。 */

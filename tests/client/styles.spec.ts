@@ -75,9 +75,27 @@ describe('三层表面必须逐级不同', () => {
     assert.equal(new Set(seen).size, TIERS.length, `三层表面里有重复颜色（${seen.join(' / ')}）`)
   })
 
-  it('泳道标题带与泳道体不同色，每列才有一个「头」', () => {
+  it('列头不再是一条实色带——那跟泳道体太接近，像一块贴上去的补丁', () => {
+    // 列头现在融进泳道自身的淡色里，靠下边框轻轻分开，不再有单独的标题带颜色。
+    assert.match(block('[data-vela-lane-head] {'), /background:\s*transparent/)
+  })
+
+  it('六列泳道各有一个淡色，两两不同——否则看不出状态身份', () => {
+    const lanes = ['backlog', 'todo', 'running', 'review', 'done', 'failed'] as const
     for (const [label, palette] of [['日间', LIGHT], ['夜间', DARK]] as const) {
-      assert.notEqual(value(palette, 'lane-head'), value(palette, 'lane'), `${label}：标题带与泳道体同色`)
+      const tints = lanes.map(lane => value(palette, `lane-${lane}`))
+      assert.ok(tints.every(tint => tint !== undefined), `${label}：缺列色 ${tints}`)
+      assert.equal(new Set(tints).size, lanes.length,
+        `${label}：有两列泳道色重复了（${tints.join(' / ')}）——那样就看不出状态身份了`)
+    }
+  })
+
+  it('每列都指到一个标识色，且都是色板里定义过的', () => {
+    // 列标识色靠 var() 间接引用，所以指向的变量必须存在（间接引用也要被
+    // 「每个被引用的变量都有定义」那条兜住，但这里专门钉「每列都有」）。
+    for (const lane of ['backlog', 'todo', 'running', 'review', 'done', 'failed']) {
+      const rule = block(`[data-vela-lane="${lane}"]`)
+      assert.match(rule, /--lane-accent:\s*var\(--vela-/, `${lane} 没有标识色`)
     }
   })
 
@@ -157,6 +175,20 @@ describe('明暗两套色板必须成对', () => {
     const literals = rules.match(/#[0-9a-fA-F]{3,8}\b|\brgba?\(/g) ?? []
     assert.deepEqual(literals, [], `这些颜色写在了规则体里而不是色板里：${literals.join(', ')}`)
   })
+
+  it('每个被引用的变量都真的有定义——未定义的 var() 会静默回落到继承色', () => {
+    // 真实事故：--vela-text-1 与 --vela-ok 被引用了却从未定义，于是标题和“正常结束”
+    // 的绿色描边其实一直没生效，靠继承色撑着，看不出来但是错的。
+    const defined = new Set(
+      [...VELA_CSS.matchAll(/--vela-([a-z0-9-]+)\s*:/g)].map(match => match[1]),
+    )
+    const used = [...new Set(
+      [...VELA_CSS.matchAll(/var\(--vela-([a-z0-9-]+)/g)].map(match => match[1]),
+    )]
+    const missing = used.filter(name => !defined.has(name))
+    assert.deepEqual(missing, [],
+      `这些变量被引用了却没定义，会静默回落到继承色：${missing.join(', ')}`)
+  })
 })
 
 describe('面板必须不透明且铺满', () => {
@@ -192,20 +224,41 @@ describe('可访问性与布局', () => {
     assert.match(block('[data-vela-card-title] {'), /overflow-wrap/)
   })
 
-  it('六列在 1152px 宽的窗口里能一次放下', () => {
-    // 真实事故：最小列宽曾是 228px，六列总宽 1442px，第六列 Failed 被挤出
-    // 屏幕。看板的全部意义是「一眼看全」，看不到的列等于不存在。
+  it('最小列宽要让一张卡读得下去——不能再窄回去', () => {
+    // 曾经为了“六列一屏放下”把列压到 176px，标题每行只能放两三个字。
+    // 那不是“一眼看全”，是“六列都读不了”。现在改成让每列读得下去、窄了就滚动。
+    const grid = block('[data-vela-grid] {')
+    const minWidth = Number(/minmax\((\d+)px/.exec(grid)?.[1])
+    assert.ok(Number.isFinite(minWidth), '读不到最小列宽')
+    assert.ok(minWidth >= 220, `最小列宽 ${minWidth}px 太窄，标题会被挤到每行只有两三个字`)
+  })
+
+  it('任何窗口下列都不会比主规则的下限更窄——窄屏分支不能偷偷降低', () => {
+    // 真实事故：主规则抬到 240px，但窄屏那条 @media 还留着 200px，于是窄窗口
+    // 反而比宽窗口更挤。把所有 grid-auto-columns 的下限都兜住。
+    const minimums = [...VELA_CSS.matchAll(/grid-auto-columns:\s*minmax\((\d+)px/g)]
+      .map(match => Number(match[1]))
+    assert.ok(minimums.length > 0, '读不到任何 grid-auto-columns 的下限')
+    for (const value of minimums) {
+      assert.ok(value >= 220, `某个分支把列宽下限降到了 ${value}px，比主规则还窄`)
+    }
+  })
+
+  it('富余宽度按比例分配给各列，而不是固定死', () => {
+    // minmax(下限, 1fr)：宽了就把多出来的空间等比摊给六列，窄了就守住下限去滚动。
+    assert.match(block('[data-vela-grid] {'), /minmax\(\d+px,\s*1fr\)/)
+  })
+
+  it('常见全屏能一屏放下六列；更窄就横向滚动，而不是裁掉或压扁', () => {
     const grid = block('[data-vela-grid] {')
     const minWidth = Number(/minmax\((\d+)px/.exec(grid)?.[1])
     const gap = Number(/gap:\s*(\d+)px/.exec(grid)?.[1])
     const padding = Number(/padding:\s*(\d+)px/.exec(grid)?.[1])
-    assert.ok(Number.isFinite(minWidth), '读不到最小列宽')
-    const total = minWidth * 6 + gap * 5 + padding * 2
-    assert.ok(total <= 1152, `六列总宽 ${total}px 超过 1152px，第六列会被挤出屏幕`)
-  })
-
-  it('放不下时横向滚动，而不是裁掉或把列压扁', () => {
-    assert.match(block('[data-vela-grid] {'), /overflow-x:\s*auto/)
+    // 看板本体的总宽。加上左侧导航栏（176px）仍要能放进一个常见的 1080p 桌面。
+    const boardWidth = minWidth * 6 + gap * 5 + padding * 2
+    assert.ok(boardWidth + 176 <= 1920,
+      `看板总宽 ${boardWidth}px 加侧栏后超过 1920px，连普通桌面都得滚动了`)
+    assert.match(grid, /overflow-x:\s*auto/, '窄窗口要横向滚动而不是裁掉')
   })
 })
 
