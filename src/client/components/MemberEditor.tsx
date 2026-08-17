@@ -94,6 +94,21 @@ export function MemberEditor(props: MemberEditorProps): ReturnType<typeof create
       'aria-label': '职责说明',
       onChange: (event: { target: { value: string } }) => onPatch({ instruction: event.target.value }),
     }),
+    // 模型路由（可空）。放职责与能力之间：它是「这个人是谁」的一部分，不是工具的事。
+    createElement('input', {
+      'data-vela-member-model': '',
+      value: member.model ?? '',
+      placeholder: '模型（留空沿用队长）；也可写 provider/model',
+      'aria-label': `队员 ${member.name} 的模型`,
+      title: '这个队员用什么模型。留空 = 沿用队长的路由。参考 dsh-agent-teams 的按队员配模型。',
+      onChange: (event: { target: { value: string } }) => {
+        const value = event.target.value
+        // 清空用空串而不是 `undefined`：`exactOptionalPropertyTypes` 下后者进不了
+        // `Partial<SquadMember>`，而领域层对两者的处置完全一致——`memberAgentOptions`、
+        // 校验与读回三处都先 trim 再判空，空串就是「没填」。
+        onPatch({ model: value.trim().length === 0 ? '' : value })
+      },
+    }),
     // 第三行：能力是可点的 chip
     createElement(
       'div',

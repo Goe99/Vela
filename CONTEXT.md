@@ -39,7 +39,7 @@ _Avoid_: Task, Job, Attempt, Execution, 执行记录
 _Avoid_: Worker, Bot, 智能体
 
 **Gate**:
-Run 产出后等待 Operator 判定接受或退回的验收环节。Gate 是异步的、可积压的，不打断 Agent 执行。
+Run 产出后等待 Operator 判定接受或退回的验收环节。一次判定同时裁定两件事：这次交付算不算数，以及这次的 Recap 值不值得留。Gate 是异步的、可积压的，不打断 Agent 执行。
 _Avoid_: Approval, Review, Check, 审批, 闸门
 
 ### 小队
@@ -63,3 +63,21 @@ _Avoid_: Prompt, Persona, System Prompt, 提示词, 人格
 **Delegation Slot**:
 一个 Member 同时在跑的额度。每个 Squad 持有固定数量的 Delegation Slot，Member 起跑前必须先领到一个、结束后交还。领不到就排队等——这是硬拦截，不是对 Leader 的劝告。
 _Avoid_: Quota, Limit, Semaphore, 并发数, 令牌
+
+### 记忆
+
+**Memory**:
+Vela 存放全部 Recap 的那一个目录，全局只有一份。落盘形态是一个 OKF 知识包（bundle）：一堆 Markdown 文件加一份索引，没有数据库。
+_Avoid_: Knowledge Base, Store, Database, 知识库, 向量库
+
+**Recap**:
+一次 Run 结束后落成的一篇记忆，一个 Run 恰好一篇。落盘形态是 Memory 里的一份 OKF 概念文档。
+_Avoid_: Summary, Note, Memo, 摘要, 笔记
+
+**Trust Level**:
+一篇 Recap 此刻可不可信。它是从文件里的溯源字段**推导**出来的，不单独存一个字段：刚落盘时 unverified，经 Gate 接受后 human-reviewed。
+_Avoid_: Score, Confidence, Rating, 评分, 置信度
+
+**Recall**:
+派活时把 Memory 里挑出的 Recap 放进这次执行的开场消息。只挑经 Gate 接受过的，先给索引、再按预算展开正文。
+_Avoid_: Retrieval, Search, RAG, 检索, 向量召回

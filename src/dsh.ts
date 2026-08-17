@@ -173,13 +173,55 @@ export interface PermissionPresetsLike {
 }
 
 /**
- * 一条会话事件。Vela 只关心两类：assistant/message 带 token 用量，
- * turn/end 宣布一次执行结束。其余原样忽略。
+ * 一条会话事件。Vela 关心三类：assistant/message 带 token 用量**与回复正文**，
+ * tool/call 带工具名与参数，turn/end 宣布一次执行结束。其余原样忽略。
  */
 export interface SessionEventLike {
   readonly seq: number
   readonly type: string
   readonly data?: unknown
+}
+
+/**
+ * `assistant/message` 事件的 data。
+ *
+ * 取证自本机真跑留下的会话日志（见 `.scratch/vela-memory/issues/01`）：正文
+ * 住在 `message.content` 的块数组里，`text` 块的键是 `type` 与 `text`。这是
+ * Recap 的正文来源（ADR-0021）——Vela 因此不需要任何新的宿主能力就能拿到
+ * Agent 的收尾交付。
+ *
+ * 全部字段可选：这是一份外来形状，dsh 无兼容承诺，少一个字段应当退化成
+ * 「这次没取到」而不是抛错。
+ */
+export interface AssistantMessageData {
+  readonly turn?: number
+  readonly step?: number
+  readonly message?: {
+    readonly role?: string
+    readonly content?: readonly ContentBlockLike[]
+  }
+  readonly usage?: unknown
+}
+
+/** 一个内容块。Vela 只读 `type === 'text'` 的那些。 */
+export interface ContentBlockLike {
+  readonly type?: string
+  readonly text?: string
+}
+
+/**
+ * `tool/call` 事件的 data。
+ *
+ * 取证结论两条要记住：`arguments` 是**JSON 字符串**而不是对象；读文件的工具
+ * 叫 `read`，文件路径在参数的 `file_path` 键上。指标口径（重复读文件次数）
+ * 建在这两条之上。
+ */
+export interface ToolCallData {
+  readonly turn?: number
+  readonly step?: number
+  readonly callId?: string
+  readonly name?: string
+  readonly arguments?: string
 }
 
 /** Cordis 上下文中 Vela 实际用到的部分。 */
