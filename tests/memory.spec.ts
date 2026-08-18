@@ -18,7 +18,9 @@ import { BoardStore } from '../src/domain/store.ts'
 import { createIssue } from '../src/domain/board.ts'
 import { Runner, observeSessions } from '../src/runner.ts'
 import { MemoryStore } from '../src/memory.ts'
-import type { MemoryWriter } from '../src/memory.ts'
+import type { MemoryGateway, MemoryWriter } from '../src/memory.ts'
+import { handleApi, API_PREFIX } from '../src/http/routes.ts'
+import type { ApiDeps } from '../src/http/routes.ts'
 import { readRecap, sectionOf } from '../src/domain/okf-recap.ts'
 import type { RunFacts } from '../src/domain/okf-recap.ts'
 import type { Issue } from '../src/domain/types.ts'
@@ -258,6 +260,17 @@ async function makeHarness(memory?: MemoryWriter): Promise<Harness> {
   }
 }
 
+/** 一份最小的 HTTP 侧依赖。 */
+function apiDeps(memory: MemoryGateway): ApiDeps {
+  return {
+    now: () => AT + 60_000,
+    newId: () => 'x',
+    sandboxPresets: () => [],
+    platform: () => 'win32',
+    memory,
+  }
+}
+
 /** 建一张卡。 */
 async function card(store: BoardStore): Promise<Issue> {
   let created: Issue | undefined
@@ -476,5 +489,183 @@ describe('失败与中断只落客观复盘', () => {
     const second = await makeHarness(undefined)
     await second.runner.reconcile()
     assert.equal(second.store.snapshot().issues[0]!.runs[0]!.outcome, 'interrupted')
+  })
+})
+
+describe('验收同时裁定复盘可不可信', () => {
+  /** 跑到「待验收」，返回现场。 */
+  async function upToGate(memory: MemoryStore): Promise<{ harness: Harness; issue: Issue; path: string }> {
+    const harness = await makeHarness(memory)
+    const issue = await card(harness.store)
+    await harness.runner.dispatch(issue.id)
+    harness.emit('ses1', assistantSaid('```vela-recap\n## 结论\n\n跑通了\n```'))
+    harness.emit('ses1', COMPLETED)
+    await waitFor(() => harness.store.snapshot().issues[0]?.lane === 'review', '进待验收')
+    await waitFor(async () => (await memory.list()).length > 0, '复盘落盘')
+    return { harness, issue, path: (await memory.list())[0]!.path }
+  }
+
+  /** 验收一次。 */
+  async function judge(
+    harness: Harness,
+    memory: MemoryGateway,
+    issueId: string,
+    body: Record<string, unknown>,
+  ): Promise<number> {
+    const response = await handleApi(harness.store, apiDeps(memory), {
+      method: 'POST',
+      path: `${API_PREFIX}/issues/${issueId}/gate`,
+      body,
+    })
+    return response.status
+  }
+
+  it('接受：文件里真的多出人审记录，等级升为 human-reviewed', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const { harness, issue, path } = await upToGate(memory)
+    assert.equal(await judge(harness, memory, issue.id, { verdict: 'accept' }), 200)
+    const recap = readRecap((await memory.readFileAt(path))!)
+    assert.equal(recap.trust, 'human-reviewed')
+    assert.equal(recap.status, 'stable')
+    assert.equal(harness.store.snapshot().issues[0]!.lane, 'done')
+  })
+
+  it('接受但不留这篇：交付照常进 Done，复盘留在未验证并标废弃', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const { harness, issue, path } = await upToGate(memory)
+    assert.equal(await judge(harness, memory, issue.id, { verdict: 'accept', keepRecap: false }), 200)
+    const recap = readRecap((await memory.readFileAt(path))!)
+    assert.equal(recap.trust, 'unverified')
+    assert.equal(recap.status, 'deprecated')
+    assert.equal(harness.store.snapshot().issues[0]!.lane, 'done')
+  })
+
+  it('默认就是连记忆一起收——不传这个字段时也升级', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const { harness, issue, path } = await upToGate(memory)
+    await judge(harness, memory, issue.id, { verdict: 'accept' })
+    assert.equal(readRecap((await memory.readFileAt(path))!).trust, 'human-reviewed')
+  })
+
+  it('退回：复盘留在草稿，不被标废弃也不被升级', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const { harness, issue, path } = await upToGate(memory)
+    assert.equal(await judge(harness, memory, issue.id, { verdict: 'reject' }), 200)
+    const recap = readRecap((await memory.readFileAt(path))!)
+    assert.equal(recap.trust, 'unverified')
+    assert.equal(recap.status, 'draft')
+    assert.equal(harness.store.snapshot().issues[0]!.lane, 'todo')
+  })
+
+  it('退回后重跑：旧那篇被标废弃，文件仍在', async () => {
+    // 被人否过的复盘是反面证据：删了可惜，召回了有害（ADR-0025）。
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const { harness, issue, path } = await upToGate(memory)
+    await judge(harness, memory, issue.id, { verdict: 'reject' })
+    // 重跑第二次。
+    await harness.runner.dispatch(issue.id)
+    harness.emit('ses1', COMPLETED)
+    await waitFor(async () => (await memory.list()).length > 1, '第二篇复盘')
+    // 等写链排空：新篇写完只是那一批的第一步，标旧篇废弃在后面。
+    await memory.settled()
+    assert.equal(readRecap((await memory.readFileAt(path))!).status, 'deprecated')
+    assert.ok(await memory.readFileAt(path) !== undefined, '文件必须还在')
+  })
+
+  it('已人审过的旧篇不会因为重跑而被废弃', async () => {
+    // 一张卡验收过后又被重新派活，旧那篇经验仍然作数。
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const { harness, issue, path } = await upToGate(memory)
+    await judge(harness, memory, issue.id, { verdict: 'accept' })
+    await harness.runner.dispatch(issue.id)
+    harness.emit('ses1', COMPLETED)
+    await waitFor(async () => (await memory.list()).length > 1, '第二篇复盘')
+    await memory.settled()
+    assert.equal(readRecap((await memory.readFileAt(path))!).status, 'stable')
+  })
+
+  it('回写失败时卡片仍然进 Done，只记一句警告', async () => {
+    // 看板是真相（ADR-0025）：一次磁盘故障不能让 Operator 没法验收卡片。
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const { harness, issue } = await upToGate(memory)
+    const warnings: string[] = []
+    const broken: MemoryGateway = {
+      verify: async () => { throw new Error('盘坏了') },
+      deprecate: async () => true,
+    }
+    const response = await handleApi(harness.store, {
+      ...apiDeps(broken),
+      logger: { warn: message => { warnings.push(String(message)) } },
+    }, {
+      method: 'POST',
+      path: `${API_PREFIX}/issues/${issue.id}/gate`,
+      body: { verdict: 'accept' },
+    })
+    assert.equal(response.status, 200)
+    assert.equal(harness.store.snapshot().issues[0]!.lane, 'done')
+    assert.match(warnings.join('\n'), /盘坏了/)
+  })
+
+  it('没配记忆库时验收照常工作', async () => {
+    const harness = await makeHarness(undefined)
+    const issue = await card(harness.store)
+    await harness.runner.dispatch(issue.id)
+    harness.emit('ses1', COMPLETED)
+    await waitFor(() => harness.store.snapshot().issues[0]?.lane === 'review', '进待验收')
+    const deps: ApiDeps = {
+      now: () => AT,
+      newId: () => 'x',
+      sandboxPresets: () => [],
+      platform: () => 'win32',
+    }
+    const response = await handleApi(harness.store, deps, {
+      method: 'POST',
+      path: `${API_PREFIX}/issues/${issue.id}/gate`,
+      body: { verdict: 'accept' },
+    })
+    assert.equal(response.status, 200)
+    assert.equal(harness.store.snapshot().issues[0]!.lane, 'done')
+  })
+})
+
+describe('对账补写人审记录', () => {
+  it('卡在 Done 而那篇仍是草稿时补上', async () => {
+    // 这就是双写失败后的修复路径，且**不需要新增快照字段**。
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    await memory.landRecap(facts(), undefined, AT)
+    const repaired = await memory.backfillVerified(
+      [{ workspace: '/repo', issueNumber: 12, runSeq: 1 }],
+      AT + 60_000,
+    )
+    assert.equal(repaired, 1)
+    assert.equal((await memory.list())[0]!.recap!.trust, 'human-reviewed')
+  })
+
+  it('已经人审过的不重复补', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const path = await memory.landRecap(facts(), undefined, AT)
+    await memory.verify(path, AT + 1_000)
+    const repaired = await memory.backfillVerified(
+      [{ workspace: '/repo', issueNumber: 12, runSeq: 1 }],
+      AT + 60_000,
+    )
+    assert.equal(repaired, 0)
+  })
+
+  it('标了废弃的不会被误补——那是「故意不要」而不是「没写成」', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const path = await memory.landRecap(facts(), undefined, AT)
+    await memory.deprecate(path, '验收时判定不值得留', AT + 1_000)
+    const repaired = await memory.backfillVerified(
+      [{ workspace: '/repo', issueNumber: 12, runSeq: 1 }],
+      AT + 60_000,
+    )
+    assert.equal(repaired, 0)
+    assert.equal((await memory.list())[0]!.recap!.trust, 'unverified')
+  })
+
+  it('文件根本不在时安静跳过', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    assert.equal(await memory.backfillVerified([{ workspace: '/x', issueNumber: 1, runSeq: 1 }], AT), 0)
   })
 })

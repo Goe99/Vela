@@ -283,6 +283,22 @@ export function apply(ctx: VelaContext, config: Config): void {
       await created.reconcile().catch((error: unknown) => {
         ctx.logger?.warn(`[vela] reconcile failed: ${describe(error)}`)
       })
+      // 记忆侧的对账（ADR-0025）：上次验收时改了快照却没写成文件的，在这里补上。
+      // 待补的事实不需要新字段：「卡在 Done 且那篇仍是草稿」本身就是信号。
+      if (memory !== undefined) {
+        const pending = store.snapshot().issues
+          .filter(issue => issue.lane === 'done' && issue.runs.length > 0)
+          .map(issue => ({
+            workspace: issue.workspace,
+            issueNumber: issue.number,
+            runSeq: issue.runs.length,
+          }))
+        await memory.backfillVerified(pending, Date.now()).then((repaired) => {
+          if (repaired > 0) ctx.logger?.info(`[vela] 补写了 ${repaired} 篇复盘的人审记录`)
+        }).catch((error: unknown) => {
+          ctx.logger?.warn(`[vela] 记忆对账失败：${describe(error)}`)
+        })
+      }
       return { store, runner: created, squads }
     }).catch((error: unknown) => {
       ctx.logger?.warn(`[vela] cannot open board at ${config.boardPath}: ${describe(error)}`)
@@ -336,6 +352,8 @@ export function apply(ctx: VelaContext, config: Config): void {
           ...(context.squads === undefined ? {} : { squads: context.squads }),
           timeline,
           ...(ctx.get('apiProxy') === undefined ? {} : { documents: openDocuments(ctx) }),
+          ...(memory === undefined ? {} : { memory }),
+          ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
         }
         const response = await handleApi(context.store, deps, request)
         send(res, response)

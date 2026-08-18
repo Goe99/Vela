@@ -67,8 +67,21 @@ export interface MemoryWriter {
   landRecap(facts: RunFacts, delivery: RecapDelivery | undefined, at: number): Promise<string>
 }
 
+/**
+ * Gate 与记忆页用到的那几个方法。
+ *
+ * HTTP 层只靠这个窄接口认识记忆库，因此接缝测试能用一个 fake 驱动
+ * 全部路由，不需要真的磁盘。
+ */
+export interface MemoryGateway {
+  /** 回写人审记录。返回假表示那篇文件不在。 */
+  verify(relative: string, at: number): Promise<boolean>
+  /** 标废弃。 */
+  deprecate(relative: string, why: string, at: number): Promise<boolean>
+}
+
 /** 一个打开的记忆库。 */
-export class MemoryStore implements MemoryWriter {
+export class MemoryStore implements MemoryWriter, MemoryGateway {
   /** 写链尾。每次写挂在前一次之后，保证三个文件的更新不交错。 */
   private tail: Promise<unknown> = Promise.resolve()
 
@@ -94,6 +107,17 @@ export class MemoryStore implements MemoryWriter {
     const next = this.tail.then(task, task)
     this.tail = next.catch(() => undefined)
     return next
+  }
+
+  /**
+   * 等写链上已排队的活干完。
+   *
+   * 一次落盘会动好几个文件（复盘、旧篇的废弃标记、更新历史、索引），
+   * 而 `landRecap` 在第一个文件写完后就能被看到。要断言「那一整批都完了」
+   * 就得等链排空——提供这个入口比让调用方轮询文件诚实。
+   */
+  async settled(): Promise<void> {
+    await this.enqueue(async () => undefined)
   }
 
   private absolute(relative: string): string {
@@ -139,9 +163,47 @@ export class MemoryStore implements MemoryWriter {
       })
       await this.writeFileAt(relative, text)
       await this.appendLogLine(loggedLanded(relative, facts.runSeq, facts.outcome), at)
+      // 重跑时把前几次还停在草稿的那些标废弃（ADR-0025）。已经人审过的不动：
+      // 一张卡验收过后又被重新派活，旧那篇经验仍然作数。
+      await this.deprecateEarlierDrafts(facts, at)
       await this.reindex(at)
       return relative
     })
+  }
+
+  /**
+   * 把同一张卡更早的、仍停在 `draft` 的复盘标成废弃。
+   *
+   * 扫目录而不是只看上一次（`runSeq - 1`）：一张卡可能连着退回多次，
+   * 只处理相邻那一篇会把中间几篇永久留在召回候选集外的灰地带。
+   */
+  private async deprecateEarlierDrafts(facts: RunFacts, at: number): Promise<void> {
+    const slug = workspaceSlug(facts.workspace)
+    let files: string[]
+    try {
+      const entries = await readdir(join(this.root, 'runs', slug), { withFileTypes: true })
+      files = entries.filter(entry => entry.isFile()).map(entry => entry.name)
+    } catch {
+      return
+    }
+    for (const file of files) {
+      const matched = /^(\d+)-r(\d+)\.md$/.exec(file)
+      if (matched === null) continue
+      if (Number(matched[1]) !== facts.issueNumber) continue
+      if (Number(matched[2]) >= facts.runSeq) continue
+      const relative = `runs/${slug}/${file}`
+      const text = await this.readFileAt(relative)
+      if (text === undefined) continue
+      let status: string
+      try {
+        status = readRecap(text).status
+      } catch {
+        // 读不懂的文件不碰：它已经不会进召回，而改它只会把坏得更彻底。
+        continue
+      }
+      if (status !== 'draft') continue
+      await this.deprecateNow(relative, `第 ${facts.runSeq} 次执行的复盘取代了它`, at)
+    }
   }
 
   /** 追加一行更新历史。 */
@@ -233,29 +295,72 @@ export class MemoryStore implements MemoryWriter {
 
   /** 一篇复盘经 Operator 验收：回写人审记录并记一行历史。 */
   async verify(relative: string, at: number, actor = OPERATOR_ACTOR): Promise<boolean> {
-    return this.enqueue(async () => {
-      const text = await this.readFileAt(relative)
-      if (text === undefined) return false
-      const next = markVerified(text, actor, at)
-      if (next === text) return true
-      await this.writeFileAt(relative, next)
-      await this.appendLogLine(loggedVerified(relative, actor), at)
-      await this.reindex(at)
-      return true
-    })
+    return this.enqueue(() => this.verifyNow(relative, at, actor))
+  }
+
+  /** 回写人审记录本体。**不走写链**，供已在链上的调用方复用。 */
+  private async verifyNow(relative: string, at: number, actor = OPERATOR_ACTOR): Promise<boolean> {
+    const text = await this.readFileAt(relative)
+    if (text === undefined) return false
+    const next = markVerified(text, actor, at)
+    if (next === text) return true
+    await this.writeFileAt(relative, next)
+    await this.appendLogLine(loggedVerified(relative, actor), at)
+    await this.reindex(at)
+    return true
   }
 
   /** 把一篇复盘标成废弃。 */
   async deprecate(relative: string, why: string, at: number): Promise<boolean> {
     return this.enqueue(async () => {
-      const text = await this.readFileAt(relative)
-      if (text === undefined) return false
-      const next = markDeprecated(text)
-      if (next === text) return true
-      await this.writeFileAt(relative, next)
-      await this.appendLogLine(loggedDeprecated(relative, why), at)
-      await this.reindex(at)
-      return true
+      const marked = await this.deprecateNow(relative, why, at)
+      // 单独标废弃时要重算索引（索引上摆着「已废弃」这个标记）；落盘路径里
+      // 不需要，那里末尾本来就会重算一次。
+      if (marked) await this.reindex(at)
+      return marked
+    })
+  }
+
+  /** 标废弃本体。**不走写链**。 */
+  private async deprecateNow(relative: string, why: string, at: number): Promise<boolean> {
+    const text = await this.readFileAt(relative)
+    if (text === undefined) return false
+    const next = markDeprecated(text)
+    if (next === text) return true
+    await this.writeFileAt(relative, next)
+    await this.appendLogLine(loggedDeprecated(relative, why), at)
+    return true
+  }
+
+  /**
+   * 对账：把漏写的人审记录补上（ADR-0025）。
+   *
+   * 待补的事实不需要新字段：「卡在 Done 且这篇仍是草稿」本身就是信号。
+   * `deprecated` 表示「故意不要」，因此与「没写成」可区分，不会被误补。
+   *
+   * @param candidates - 已验收接受的卡的最后一次执行。
+   * @returns 真的补上了几篇。
+   */
+  async backfillVerified(
+    candidates: readonly Pick<RunFacts, 'workspace' | 'issueNumber' | 'runSeq'>[],
+    at: number,
+  ): Promise<number> {
+    return this.enqueue(async () => {
+      let repaired = 0
+      for (const candidate of candidates) {
+        const relative = recapRelativePath(candidate)
+        const text = await this.readFileAt(relative)
+        if (text === undefined) continue
+        let status: string
+        try {
+          status = readRecap(text).status
+        } catch {
+          continue
+        }
+        if (status !== 'draft') continue
+        if (await this.verifyNow(relative, at)) repaired += 1
+      }
+      return repaired
     })
   }
 

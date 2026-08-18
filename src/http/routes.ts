@@ -6,7 +6,7 @@
  * 领域错误到状态码的映射集中在这里一处，别处不再 catch 猜语义。
  */
 
-import type { Board, ExecOverrides, Priority, TokenUsage } from '../domain/types.ts'
+import type { Board, ExecOverrides, Issue, Priority, TokenUsage } from '../domain/types.ts'
 import { LANES, PRIORITIES } from '../domain/types.ts'
 import type { BoardErrorCode, BoardResult, CreateIssueInput, GateVerdict } from '../domain/board.ts'
 import {
@@ -18,7 +18,10 @@ import { validateOverrides } from '../domain/exec.ts'
 import type { Squad, SquadMember } from '../domain/squad.ts'
 import type { DocumentTarget } from '../domain/nav.ts'
 import { DOCUMENT_TARGETS } from '../domain/nav.ts'
+import type { MemberSpan } from '../domain/timeline.ts'
 import type { SquadErrorCode, SquadResult } from '../domain/squad-store.ts'
+import type { MemoryGateway } from '../memory.ts'
+import { recapRelativePath } from '../domain/okf-recap.ts'
 import {
   ABILITIES, DEFAULT_MAX_PARALLEL_MEMBERS, MEMBER_BACKENDS, leaderInstruction, squadIdFor,
 } from '../domain/squad.ts'
@@ -71,6 +74,13 @@ export interface ApiDeps {
   readonly timeline?: TimelinePort
   /** 把配置文件交给系统打开。缺失时对应的导航项退化为只显示路径。 */
   readonly documents?: DocumentPort
+  /**
+   * 记忆库（ADR-0022 / 0025）。**缺失表示没配 `memoryPath`**，此时验收只裁定
+   * 交付，不碍任何记忆的事。
+   */
+  readonly memory?: MemoryGateway
+  /** 记一句警告。缺失表示这个部署没有 logger。 */
+  readonly logger?: { warn(message: unknown): void }
 }
 
 /**
@@ -82,7 +92,7 @@ export interface ApiDeps {
  * 与实时用量同类：**不落盘**的运行时事实。
  */
 export interface TimelinePort {
-  spansFor(sessionId: string): readonly unknown[]
+  spansFor(sessionId: string): readonly MemberSpan[]
   parents(): readonly string[]
 }
 
@@ -105,6 +115,45 @@ export interface SquadPort {
  */
 export interface DocumentPort {
   open(target: DocumentTarget): Promise<{ readonly opened: boolean; readonly path?: string }>
+}
+
+/**
+ * 验收之后处置那篇复盘（ADR-0025）。
+ *
+ * 只在快照已经改成功之后调。回写失败**只记一句警告**：看板是真相，
+ * 一次磁盘故障不能让 Operator 没法验收卡片。
+ *
+ * @param issue - 验收**之前**的那张卡（验收会改 Lane，但不改 runs）。
+ */
+async function settleRecap(
+  deps: ApiDeps,
+  issue: Issue | undefined,
+  verdict: GateVerdict,
+  keepRecap: boolean,
+): Promise<void> {
+  const memory = deps.memory
+  if (memory === undefined || issue === undefined || issue.runs.length === 0) return
+  const relative = recapRelativePath({
+    workspace: issue.workspace,
+    issueNumber: issue.number,
+    runSeq: issue.runs.length,
+  })
+  try {
+    if (verdict === 'accept' && keepRecap) {
+      await memory.verify(relative, deps.now())
+      return
+    }
+    if (verdict === 'accept') {
+      // 交付算数但这篇不要：留在未验证，并标废弃——否则它会一直摆在候选集旁边。
+      await memory.deprecate(relative, '验收时判定这篇不值得留', deps.now())
+      return
+    }
+    // 退回：什么都不动。它留在草稿，等重跑落新篇时被标废弃。
+  } catch (error) {
+    deps.logger?.warn(
+      `vela: 验收后回写复盘失败（${relative}）：${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
 }
 
 const STATUS_BY_CODE: Readonly<Record<BoardErrorCode, number>> = {
@@ -195,7 +244,31 @@ function boardView(board: Board, deps: ApiDeps, squads: readonly Squad[]): unkno
      * 能用「有没有这个键」区分「派了小队但一个队员也没派出」与「这不是小队 Run」。
      */
     timelines: timelineView(deps),
+    /**
+     * 每张卡**此刻**在跑的队员名单，按 issue id 索引（ADR-0019 的同一台记录器）。
+     *
+     * 只写有队员真的在跑的卡：没有这个键 = 没有队员在跑。队员名反查不到时
+     * 用任务描述兜底——「有活正在跑」这个事实比「是谁」更不能丢。
+     */
+    liveMembers: liveMembersView(board, deps),
   }
+}
+
+/** 算出每张卡此刻有哪些队员在跑。 */
+function liveMembersView(board: Board, deps: ApiDeps): Record<string, readonly string[]> {
+  const timeline = deps.timeline
+  if (timeline === undefined) return {}
+  const out: Record<string, readonly string[]> = {}
+  for (const issue of board.issues) {
+    // 当前 Run = 最后一个还没到终态的。已到终态的 Run 里不会有在跑的队员。
+    const active = issue.runs.findLast(run => run.endedAt === undefined)
+    if (active === undefined) continue
+    const running = timeline.spansFor(active.sessionId)
+      .filter(span => span.observedEnd === undefined)
+      .map(span => span.member ?? span.label)
+    if (running.length > 0) out[issue.id] = running
+  }
+  return out
 }
 
 /** 把时间轴投成一个按会话 id 索引的对象。没接记录器时给空对象。 */
@@ -539,12 +612,21 @@ export async function handleApi(
     if (verdict !== 'accept' && verdict !== 'reject') {
       return json(400, { ok: false, code: 'invalid', message: 'verdict must be accept or reject' })
     }
+    // 验收前先拿住这张卡：后面要用它算出那篇复盘的路径，而验收会改 Lane。
+    const before = store.snapshot().issues.find(candidate => candidate.id === issueId)
+    // 默认连记忆一起收（ADR-0025）；只有显式传 false 才是「这篇不要」。
+    const keepRecap = body?.keepRecap !== false
     let outcome: BoardResult<Board> | undefined
     await store.mutate((board) => {
       const result = gate(board, issueId, verdict as GateVerdict, deps.now())
       outcome = result
       return result.ok ? { board: result.value, value: undefined } : undefined
     })
+    // 顺序固定：**先改快照、再回写文件**。看板是真相，回写失败只记一笔，
+    // 由下次启动或打开记忆页时的对账补上（ADR-0025）。
+    if (outcome?.ok === true) {
+      await settleRecap(deps, before, verdict, keepRecap)
+    }
     return settleWithView(outcome!, 200)
   }
 
