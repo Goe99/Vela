@@ -249,12 +249,12 @@ describe('号牌 provider：时间轴记录', () => {
   /** 一个记下调用的假记录器。 */
   function fakeSink() {
     const starts: { parent: string; span: Record<string, unknown> }[] = []
-    const ends: { parent: string; runId: string; at: number; stopReason: string | undefined }[] = []
+    const ends: { parent: string; runId: string; at: number; stopReason: string | undefined; summary: string | undefined }[] = []
     return {
       sink: {
         start: (parent: string, span: Record<string, unknown>) => { starts.push({ parent, span }) },
-        end: (parent: string, runId: string, at: number, stopReason: string | undefined) => {
-          ends.push({ parent, runId, at, stopReason })
+        end: (parent: string, runId: string, at: number, stopReason: string | undefined, summary?: string) => {
+          ends.push({ parent, runId, at, stopReason, summary })
         },
       },
       starts,
@@ -346,6 +346,95 @@ describe('号牌 provider：时间轴记录', () => {
     await wrapped.start({ ...request(), parent: { ctx: {}, id: 'p1' }, persona: '一模一样' })
     await settle()
     assert.equal(recorder.starts[0]?.span.member, undefined)
+  })
+
+  it('persona 带着 Vela 追加的结束约定时仍能认出队员——反查认前缀', async () => {
+    // persona = 职责原文 + 结束约定（见 squad.ts 的 memberPersona）。这是新默认，
+    // 反查必须跟得上，否则所有泳道的队员名会全部丢失。
+    const recorder = fakeSink()
+    const inner = fakeInner({
+      start: () => Promise.resolve({ id: 'c1', result: Promise.resolve({ stopReason: 'completed' }) }),
+    })
+    const wrapped = slottedProvider(inner.provider, withTimeline(recorder))
+    await wrapped.start({
+      ...request(),
+      parent: { ctx: {}, id: 'p1' },
+      label: '建 a',
+      persona: '你只做 a\n\n结束时，你的最后一条消息用一两句话说明：做了什么、结果如何。',
+    })
+    await settle()
+    assert.equal(recorder.starts[0]?.span.member, 'worker_a')
+  })
+
+  it('两个队员职责互为前缀时取最长的那个——最具体的才是真的', async () => {
+    const recorder = fakeSink()
+    const inner = fakeInner({
+      start: () => Promise.resolve({ id: 'c1', result: Promise.resolve({ stopReason: 'completed' }) }),
+    })
+    const wrapped = slottedProvider(inner.provider, {
+      slots: pool(),
+      quotaFor: () => Promise.resolve({
+        key: 'vela-a',
+        limit: 3,
+        members: [
+          { name: 'coder', instruction: '你写代码' },
+          { name: 'tester', instruction: '你写代码并跑测试' },
+        ],
+      }),
+      timeline: recorder.sink,
+      now: () => 1000,
+    })
+    await wrapped.start({
+      ...request(),
+      parent: { ctx: {}, id: 'p1' },
+      persona: '你写代码并跑测试\n\n结束约定',
+    })
+    await settle()
+    assert.equal(recorder.starts[0]?.span.member, 'tester')
+  })
+
+  it('队员最后一条消息的文本被记下当总结——验收不用翻整场会话', async () => {
+    const recorder = fakeSink()
+    const inner = fakeInner({
+      start: () => Promise.resolve({
+        id: 'c1',
+        result: Promise.resolve({
+          stopReason: 'completed',
+          output: [{ type: 'text', text: '建好了 slot-a.txt，内容是一行 a。' }],
+        }),
+      }),
+    })
+    const wrapped = slottedProvider(inner.provider, withTimeline(recorder))
+    await wrapped.start({ ...request(), parent: { ctx: {}, id: 'p1' }, label: '建 a', persona: '你只做 a' })
+    await settle()
+    assert.equal(recorder.ends[0]?.summary, '建好了 slot-a.txt，内容是一行 a。')
+  })
+
+  it('队员什么也没说时总结缺省，不造一句假的', async () => {
+    const recorder = fakeSink()
+    const inner = fakeInner({
+      start: () => Promise.resolve({ id: 'c1', result: Promise.resolve({ stopReason: 'completed', output: [] }) }),
+    })
+    const wrapped = slottedProvider(inner.provider, withTimeline(recorder))
+    await wrapped.start({ ...request(), parent: { ctx: {}, id: 'p1' }, label: '建 a', persona: '你只做 a' })
+    await settle()
+    assert.equal(recorder.ends[0]?.summary, undefined)
+  })
+
+  it('超长总结被截断——泳道下方不是报告全文，全文点泳道进会话看', async () => {
+    const recorder = fakeSink()
+    const inner = fakeInner({
+      start: () => Promise.resolve({
+        id: 'c1',
+        result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: '长'.repeat(400) }] }),
+      }),
+    })
+    const wrapped = slottedProvider(inner.provider, withTimeline(recorder))
+    await wrapped.start({ ...request(), parent: { ctx: {}, id: 'p1' }, label: '建 a', persona: '你只做 a' })
+    await settle()
+    const summary = recorder.ends[0]?.summary ?? ''
+    assert.equal(summary.length, 280)
+    assert.ok(summary.endsWith('…'))
   })
 
   it('基础设施故障也记下收尾，且停止原因不置空', async () => {

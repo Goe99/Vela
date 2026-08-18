@@ -15,9 +15,9 @@ import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  APPENDED_SECTION_HEADER, DEFAULT_MAX_PARALLEL_MEMBERS, baselineProblem, composeComposition,
-  composePolicy, leaderInstruction, memberTools, parsePolicy, slugify, squadIdFor, toolsForAbility,
-  validateSquad,
+  APPENDED_SECTION_HEADER, DEFAULT_MAX_PARALLEL_MEMBERS, MEMBER_OUTRO, baselineProblem,
+  composeComposition, composePolicy, leaderInstruction, memberTools, parsePolicy, slugify,
+  squadIdFor, toolsForAbility, validateSquad,
 } from '../../src/domain/squad.ts'
 import type { Squad, SquadMember } from '../../src/domain/squad.ts'
 import { SquadStore } from '../../src/domain/squad-store.ts'
@@ -77,6 +77,7 @@ function member(overrides: Partial<SquadMember> = {}): SquadMember {
     abilities: overrides.abilities ?? ['read', 'edit'],
     ...(overrides.extraTools === undefined ? {} : { extraTools: overrides.extraTools }),
     backend: overrides.backend ?? 'spawn',
+    ...(overrides.model === undefined ? {} : { model: overrides.model }),
   }
 }
 
@@ -269,7 +270,9 @@ describe('组合文件的内容', () => {
       members: [member({ name: 'a', instruction: '只改前端', abilities: ['edit'] })],
     }), LINUX, BASELINE))
     const config = rows[0]!.config
-    assert.equal(config.persona, '只改前端')
+    // persona = 职责原文 + Vela 追加的结束约定（要求队员干完写一句总结，
+    // 这段话会被提取出来显示在泳道下方给验收的人看）。
+    assert.equal(config.persona, `只改前端\n\n${MEMBER_OUTRO}`)
     assert.deepEqual((config.toolFilter as { allow: string[] }).allow, ['write', 'edit'])
     assert.equal(config.provider, 'spawn')
     // 一次性而不是可继续：可继续会把委派的默认变成后台，而后台可继续子代理
@@ -298,6 +301,33 @@ describe('组合文件的内容', () => {
       members: [member({ backend: 'fork' })],
     }), LINUX, BASELINE))
     assert.equal(rows[0]?.config.provider, 'fork')
+  })
+
+  it('队员没填模型时不写 agentOptions——行里一个字都不多写', () => {
+    const rows = appendedRows(composeComposition(squad({ members: [member()] }), LINUX, BASELINE))
+    assert.ok(!('agentOptions' in (rows[0]?.config ?? {})), '留空就是沿用队长，不该有 agentOptions 这个键')
+  })
+
+  it('纯模型名只设 model，provider 由 DSH 从队长继承', () => {
+    const rows = appendedRows(composeComposition(squad({
+      members: [member({ model: 'deepseek-reasoner' })],
+    }), LINUX, BASELINE))
+    assert.deepEqual(rows[0]?.config.agentOptions, { model: 'deepseek-reasoner' })
+  })
+
+  it('provider/model 拆成两个字段——队员可以走与队长不同的路由', () => {
+    const rows = appendedRows(composeComposition(squad({
+      members: [member({ model: 'openai/gpt-5' })],
+    }), LINUX, BASELINE))
+    assert.deepEqual(rows[0]?.config.agentOptions, { provider: 'openai', model: 'gpt-5' })
+  })
+
+  it('模型的半边写法（「/foo」「foo/」）在校验时被拒，而不是静默回落成沿用队长', () => {
+    // 静默回落是这类配置最危险的失败方式：Operator 以为是强模型，实际跑的是默认。
+    assert.match(validateSquad(squad({ members: [member({ model: '/foo' })] }), LINUX) ?? '', /不合法/)
+    assert.match(validateSquad(squad({ members: [member({ model: 'foo/' })] }), LINUX) ?? '', /不合法/)
+    // 而合法写法通过。
+    assert.equal(validateSquad(squad({ members: [member({ model: 'deepseek-reasoner' })] }), LINUX), undefined)
   })
 
   it('没有队员的小队就是一份基准的副本，不带多余的追加段', () => {
@@ -351,8 +381,8 @@ describe('策略文件的往返', () => {
   it('写出再读回，Operator 的原始意图一字不差', () => {
     const original = squad({
       members: [
-        member({ name: 'coder', abilities: ['read', 'edit', 'shell'], extraTools: ['lsp'] }),
-        member({ name: 'checker', abilities: ['read'], backend: 'fork' }),
+        member({ name: 'coder', abilities: ['read', 'edit', 'shell'], extraTools: ['lsp'], model: 'deepseek-reasoner' }),
+        member({ name: 'checker', abilities: ['read'], backend: 'fork', model: 'openai/gpt-5' }),
       ],
       sandbox: 'workspace-write',
       maxParallelMembers: 2,

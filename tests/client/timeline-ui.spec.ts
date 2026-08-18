@@ -43,6 +43,7 @@ const twoLanes: readonly MemberSpan[] = [
     observedStart: T0,
     observedEnd: T0 + 2400,
     stopReason: 'completed',
+    summary: '建好了 slot-a.txt，内容是一行 a。',
   },
   {
     runId: 'c2',
@@ -81,6 +82,13 @@ describe('SquadTimeline', () => {
     assert.ok(html.includes('data-tone="ok"'))
     assert.ok(html.includes('data-tone="bad"'))
     assert.ok(html.includes('出错'))
+  })
+
+  it('队员的总结显示在泳道下方；没写的泳道不造占位符', () => {
+    const html = renderToStaticMarkup(createElement(SquadTimeline, timelineProps(twoLanes)))
+    assert.ok(html.includes('建好了 slot-a.txt'), '完成的泳道要带总结')
+    // 只有一条泳道有总结。
+    assert.equal(html.split('data-vela-lane-summary').length - 1, 1)
   })
 
   it('还在跑的泳道标成在跑，且用另一种色调', () => {

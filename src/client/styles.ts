@@ -534,6 +534,13 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   font-size: 11px;
   color: var(--vela-accent);
 }
+
+/* 此刻在跑的队员名单：跟在实时用量后面，同一个色系的「活」信号。 */
+[data-vela-live-members] {
+  font-size: 11px;
+  color: var(--vela-accent);
+  margin-top: 1px;
+}
 [data-vela-live]::before {
   content: '';
   width: 6px;
@@ -720,6 +727,18 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   text-align: right;
   color: var(--vela-text-3);
   font-variant-numeric: tabular-nums;
+}
+
+/* 队员干完写的那句总结：泳道下方的小字，验收先看它。 */
+[data-vela-lane-summary] {
+  margin-top: 3px;
+  padding: 5px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vela-text-2);
+  background: var(--vela-inset);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
 }
 
 [data-vela-timeline-note] {
@@ -1253,6 +1272,18 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* 成员 tab 的「加队员」区：模板下拉 + 空白按钮。下拉限宽，别撑满。 */
+[data-vela-squad-add] {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+[data-vela-squad-add] select {
+  width: auto;
+  flex: 0 0 auto;
 }
 
 [data-vela-abilities] {

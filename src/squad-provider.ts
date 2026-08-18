@@ -121,7 +121,7 @@ export interface TimelineSink {
     readonly member: string | undefined
     readonly at: number
   }): void
-  end(parentSessionId: string, runId: string, at: number, stopReason: string | undefined): void
+  end(parentSessionId: string, runId: string, at: number, stopReason: string | undefined, summary?: string): void
 }
 
 /** Vela 的后端名 = 原生名加这个前缀。 */
@@ -187,7 +187,8 @@ export function slottedProvider(
       run.result.then(
         (result) => {
           ticket.release()
-          record?.(stopReasonOf(result))
+          // 队员最后一条消息的文本就是它的工作总结（persona 里的结束约定要求它写）。
+          record?.(stopReasonOf(result), summaryOf(result))
         },
         (error: unknown) => {
           ticket.release()
@@ -277,7 +278,7 @@ function beginRecord(
   run: SubagentRunLike,
   quota: SquadQuota,
   deps: SlottedProviderDeps,
-): ((stopReason: string | undefined) => void) | undefined {
+): ((stopReason: string | undefined, summary?: string) => void) | undefined {
   const sink = deps.timeline
   const parentSessionId = request.parent.id
   const sessionId = run.id
@@ -291,7 +292,7 @@ function beginRecord(
     member: memberNameOf(request, quota),
     at: now(),
   })
-  return (stopReason) => { sink.end(parentSessionId, sessionId, now(), stopReason) }
+  return (stopReason, summary) => { sink.end(parentSessionId, sessionId, now(), stopReason, summary) }
 }
 
 /**
@@ -314,8 +315,20 @@ function memberNameOf(
 ): string | undefined {
   const persona = (request.persona ?? request.descriptor?.persona)?.trim()
   if (persona === undefined || persona.length === 0) return undefined
-  const matches = (quota.members ?? []).filter(member => member.instruction.trim() === persona)
-  return matches.length === 1 ? matches[0]!.name : undefined
+  // persona = 职责说明 + Vela 追加的结束约定，所以反查是「全等或以前缀开头」
+  // 两种都认（全等兼容没重新保存过的旧小队）。
+  const candidates = (quota.members ?? [])
+    .filter(member => member.instruction.trim().length > 0)
+    .filter((member) => {
+      const own = member.instruction.trim()
+      return persona === own || persona.startsWith(`${own}\n`)
+    })
+  if (candidates.length === 0) return undefined
+  // 两个队员的职责互为前缀时（「你写代码」与「你写代码并测试」），取最长的那个——
+  // 最具体的才是真的。最长有并列（职责完全相同）就认不出，返回 undefined 而不猜。
+  const longest = Math.max(...candidates.map(member => member.instruction.trim().length))
+  const bests = candidates.filter(member => member.instruction.trim().length === longest)
+  return bests.length === 1 ? bests[0]!.name : undefined
 }
 
 /**
@@ -328,4 +341,29 @@ function stopReasonOf(result: unknown): string | undefined {
   if (typeof result !== 'object' || result === null) return undefined
   const reason = (result as { stopReason?: unknown }).stopReason
   return typeof reason === 'string' ? reason : undefined
+}
+
+/** 总结最多留多长。它显示在泳道下方，不是报告全文——全文点泳道进会话看。 */
+const SUMMARY_MAX = 280
+
+/**
+ * 从一次派生的结果里取队员的总结文本。
+ *
+ * SubagentResult.output 是队员最后一条非空助手消息的内容块。宽松地读：形状
+ * 不符时返回 undefined，泳道只是少一行总结，不该为此抛错。
+ */
+function summaryOf(result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null) return undefined
+  const output = (result as { output?: unknown }).output
+  if (!Array.isArray(output)) return undefined
+  const text = output
+    .map((block) => {
+      if (typeof block !== 'object' || block === null) return ''
+      const candidate = block as { type?: unknown; text?: unknown }
+      return candidate.type === 'text' && typeof candidate.text === 'string' ? candidate.text : ''
+    })
+    .join('\n')
+    .trim()
+  if (text.length === 0) return undefined
+  return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX - 1)}…` : text
 }

@@ -314,6 +314,10 @@ function readSquad(body: unknown, fallbackId?: string): Squad | { readonly error
       abilities,
       ...(extraTools.length === 0 ? {} : { extraTools }),
       backend: backend as typeof MEMBER_BACKENDS[number],
+      // model 是可选的；非字符串或空串就丢掉，与 extraTools 的纪律一致。
+      ...(typeof member.model === 'string' && member.model.trim().length > 0
+        ? { model: member.model.trim() }
+        : {}),
     })
   }
   const parallel = raw.maxParallelMembers

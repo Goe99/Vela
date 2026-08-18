@@ -36,6 +36,7 @@ function injected() {
     json: async () => ({
       board: { version: BOARD_VERSION, nextNumber: 1, issues: [] },
       liveUsage: {},
+    liveMembers: {},
       sandboxPresets: ['workspace-write'],
       squads: [],
       canDispatch: true,
@@ -55,6 +56,7 @@ function gridProps(overrides: Partial<BoardGridProps> = {}): BoardGridProps {
     squads: [],
     canDispatch: true,
     liveUsage: {},
+    liveMembers: {},
     selectedId: undefined,
     onSelect: () => undefined,
     openSession: face.openSession,

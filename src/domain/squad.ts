@@ -104,6 +104,33 @@ export interface SquadMember {
   /** 高级逃生口：直接追加工具名。填错会让整支队起不来，所以不是默认路径。 */
   readonly extraTools?: readonly string[]
   readonly backend: MemberBackend
+  /**
+   * 这个队员用的模型，可选。留空 = 沿用队长当前的路由。
+   *
+   * 两种写法：纯模型名（`deepseek-reasoner`，provider 沿用队长），或
+   * `provider/model` 显式换路由。参考 dsh-agent-teams 的 per-member 路由——
+   * 但 reasoningEffort 做不了：它不在子代理的 agentOptions 里（那是会话级
+   * 配置，得从 request 瀑布注入，一次性队员没有那个挂载点）。
+   */
+  readonly model?: string
+}
+
+/**
+ * 把队员的 model 字段解成子代理的 agentOptions。
+ *
+ * `provider/model` 拆成两个字段；纯模型名只设 model（provider 由 DSH 从父级
+ * 继承，见 subagent 的 resolveChildAgentOptions：父级打底、请求级覆盖）。
+ * 返回 undefined 表示沿用队长——行里就不写 agentOptions，一个字都不多写。
+ */
+export function memberAgentOptions(member: SquadMember): { provider?: string; model?: string } | undefined {
+  const raw = member.model?.trim() ?? ''
+  if (raw.length === 0) return undefined
+  const slash = raw.indexOf('/')
+  if (slash < 0) return { model: raw }
+  const provider = raw.slice(0, slash).trim()
+  const model = raw.slice(slash + 1).trim()
+  if (provider.length === 0 || model.length === 0) return undefined
+  return { provider, model }
 }
 
 /** 一支小队。 */
@@ -224,6 +251,12 @@ export function validateSquad(squad: Squad, platform: string): string | undefine
     if (!MEMBER_BACKENDS.includes(member.backend)) {
       return `队员 "${member.name}" 的执行后端 "${member.backend}" 不支持`
     }
+    // 模型字段的格式校验：填了就必须能解出 agentOptions。「/foo」「foo/」这种
+    // 半边写法会在 memberAgentOptions 里静默回落成沿用队长——那不是用户要的，
+    // 而静默回落恰恰是这类配置最危险的失败方式（以为是强模型，实际跑的是默认）。
+    if (member.model !== undefined && member.model.trim().length > 0 && memberAgentOptions(member) === undefined) {
+      return `队员 "${member.name}" 的模型 "${member.model}" 不合法：写模型名或 provider/model`
+    }
     // 一个没有任何工具的队员什么也做不了。这里刻意报错而不是"没白名单=全放开"
     // ——后者会让"我取消了所有勾选"变成一次静默的权限放大。
     if (memberTools(member, platform).length === 0) {
@@ -293,6 +326,27 @@ interface CompositionRow {
 function renderRow(row: CompositionRow): string {
   const [first, ...rest] = JSON.stringify(row, undefined, 2).split('\n')
   return [`- ${first}`, ...rest.map(line => `  ${line}`)].join('\n')
+}
+
+/**
+ * 队员职责说明的结束约定：Vela 自动追加在每个队员的 persona 后面。
+ *
+ * 为什么由 Vela 包而不是让 Operator 自己写：总结的读者是看板上验收卡片的人。
+ * 队员最后一条助手消息的文本会被 Vela 提取出来显示在泳道下方——没有这个约定，
+ * 队员最后一句话可能是任何东西（一个文件路径、一句「好了」），验收就得翻整场会话。
+ *
+ * 注意连锁影响：provider 侧拿 persona 反查队员名时，必须按「全等或前缀」认人，
+ * 因为这里的 persona 已经不等于 Operator 写的职责原文了（见 squad-provider 的
+ * memberNameOf）。
+ */
+export const MEMBER_OUTRO =
+  '结束时，你的最后一条消息用一两句话说明：做了什么、结果如何。这段话会显示在任务卡片上，给验收的人看。'
+
+/** 队员的 persona = 职责原文 + 结束约定。职责为空时不造 persona（行里不写这个字段）。 */
+export function memberPersona(member: SquadMember): string | undefined {
+  const own = member.instruction.trim()
+  if (own.length === 0) return undefined
+  return `${own}\n\n${MEMBER_OUTRO}`
 }
 
 /** 追加段的分隔注释。让人手打开文件时一眼看出哪里是 Vela 写的。 */
@@ -369,8 +423,10 @@ export function composeComposition(
       // 覆盖。代价：队员的会话跑完就收尾，不能再给它补充指令（但依旧能点进去看，
       // 会话本身是真存在的）。拿不能追加指令换一个真的能拦住的并发上限，这笔账划得来。
       backgroundMode: 'one-shot',
-      ...(member.instruction.trim().length === 0 ? {} : { persona: member.instruction.trim() }),
+      ...(memberPersona(member) === undefined ? {} : { persona: memberPersona(member) }),
       toolFilter: { allow: [...memberTools(member, platform)] },
+      // 队员的模型路由（可空）。schema 原生支持 agentOptions，逐字段覆盖父级继承。
+      ...(memberAgentOptions(member) === undefined ? {} : { agentOptions: memberAgentOptions(member) }),
     },
   }))
   // 基准末尾未必有换行。少一个换行会让第一个队员行粘到基准最后一行上，得到一份
@@ -445,6 +501,8 @@ export function parsePolicy(id: string, policyText: string): Squad | undefined {
       backend: MEMBER_BACKENDS.includes(member.backend as MemberBackend)
         ? (member.backend as MemberBackend)
         : 'spawn',
+      // model 是可选的；读回时只接受非空字符串，其余形状一律丢掉（与 abilities 同款纪律）。
+      ...(typeof member.model === 'string' && member.model.trim().length > 0 ? { model: member.model } : {}),
     })
   }
   const parallel = record.maxParallelMembers

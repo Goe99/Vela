@@ -52,6 +52,8 @@ export interface BoardGridProps {
   readonly squads: readonly SquadShape[]
   readonly canDispatch: boolean
   readonly liveUsage: Readonly<Record<string, TokenUsage>>
+  /** 每张卡此刻在跑的队员名单（按 issue id）。没有这个键 = 没有队员在跑。 */
+  readonly liveMembers: Readonly<Record<string, readonly string[]>>
   /** 详情抽屉里那张卡的 id（用于高亮）；未打开时 undefined。 */
   readonly selectedId: string | undefined
   /** 选中一张卡——传 undefined 关抽屉。 */
@@ -207,6 +209,7 @@ function LaneColumn(props: LaneColumnProps): ReturnType<typeof createElement> {
         squads: props.squads,
         canDispatch: props.canDispatch,
         liveUsage: props.liveUsage[issue.id],
+        liveMembers: props.liveMembers[issue.id],
         isSelected: props.selectedId === issue.id,
         onOpenDetail: () => props.onSelect(issue.id),
         openSession: props.openSession,

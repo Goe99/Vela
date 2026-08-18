@@ -84,6 +84,23 @@ describe('BoardClient.refresh', () => {
     assert.equal(view?.canDispatch, true)
   })
 
+  it('时间轴与在跑名单必须透传——这两个字段丢过一次，抽屉的时间轴因此永远不渲染', async () => {
+    // 真实事故（浏览器验证抓到的）：类型里声明了、服务端也发了，唯独 readView
+    // 没抄这两个字段。组件测试全直接构造 props 不过这里，所以必须由这条接缝钉住。
+    const span = {
+      runId: 'r1', sessionId: 's1', label: '建 a', member: 'worker_a',
+      observedStart: 1, observedEnd: 2, stopReason: 'completed', summary: '建好了。',
+    }
+    const client = new BoardClient(fakeFetch([{
+      ok: true,
+      status: 200,
+      body: { ...boardBody(), timelines: { s1: [span] }, liveMembers: { 'issue-1': ['worker_a'] } },
+    }]))
+    const view = await client.refresh()
+    assert.deepEqual(view?.timelines?.s1, [span])
+    assert.deepEqual(view?.liveMembers?.['issue-1'], ['worker_a'])
+  })
+
   it('请求失败时保留上次成功快照，不清空', async () => {
     const client = new BoardClient(fakeFetch([
       { ok: true, status: 200, body: boardBody([{ id: 'a' }]) },

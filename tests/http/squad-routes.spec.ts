@@ -133,6 +133,29 @@ describe('小队路由', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
+  it('队员的 model 字段在保存往返中不丢——它在 HTTP 入口被丢过一次', async () => {
+    // 真实事故（浏览器验证抓到的）：readSquad 逐个抄队员字段时漏了 model，
+    // PATCH 体里的 model 在写盘前就被丢掉，界面上填了模型保存后回来是空的。
+    const squads = fakeSquads()
+    const { store, deps, dir } = await bench(squads)
+    await handleApi(store, deps, { method: 'POST', path: `${API_PREFIX}/squads`, body: body() })
+    const patched = await handleApi(store, deps, {
+      method: 'PATCH',
+      path: `${API_PREFIX}/squads/vela-backend`,
+      body: body({
+        members: [{ name: 'coder', instruction: 'write code', abilities: ['read', 'edit'], backend: 'spawn', model: 'deepseek-reasoner' }],
+      }),
+    })
+    assert.equal(patched.status, 200)
+    const squad = (patched.body as { squad: Squad }).squad
+    assert.equal(squad.members[0]?.model, 'deepseek-reasoner', 'model 必须活着走到 store')
+    // 再读一次列表，确认它不是只在响应里装了装样子。
+    const listed = await handleApi(store, deps, { method: 'GET', path: `${API_PREFIX}/squads` })
+    const found = (listed.body as { squads: Squad[] }).squads.find(item => item.id === 'vela-backend')
+    assert.equal(found?.members[0]?.model, 'deepseek-reasoner', '列表里也要带着')
+    await rm(dir, { recursive: true, force: true })
+  })
+
   it('PATCH 不存在的小队返回 404', async () => {
     const { store, deps, dir } = await bench(fakeSquads())
     const response = await handleApi(store, deps, {

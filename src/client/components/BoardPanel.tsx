@@ -249,6 +249,7 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
             squads: view?.squads ?? [],
             canDispatch: view?.canDispatch ?? false,
             liveUsage: view?.liveUsage ?? {},
+            liveMembers: view?.liveMembers ?? {},
             selectedId,
             onSelect: setSelectedId,
             openSession: props.openSession,

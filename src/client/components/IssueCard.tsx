@@ -25,6 +25,8 @@ export interface IssueCardProps {
   readonly canDispatch: boolean
   /** 在途 Run 的实时用量；不落盘，只用于展示。 */
   readonly liveUsage: TokenUsage | undefined
+  /** 此刻在跑的队员名单；undefined = 没有队员在跑。 */
+  readonly liveMembers: readonly string[] | undefined
   readonly client: BoardClient
   readonly isDragging: boolean
   /** 这张卡的详情抽屉正开着。 */
@@ -193,6 +195,15 @@ export function IssueCard(props: IssueCardProps): ReturnType<typeof createElemen
         'div',
         { key: 'live', 'data-vela-live': '' },
         `${formatTokens(props.liveUsage)} tokens`,
+      )]
+      : []),
+    // 此刻哪些队员在跑：看板一眼能看出这张卡不是死等的。名单来自时间轴
+    // 记录器（后端算好），队员名反查不到时那里已用任务描述兜底。
+    ...(running !== undefined && props.liveMembers !== undefined && props.liveMembers.length > 0
+      ? [createElement(
+        'div',
+        { key: 'live-members', 'data-vela-live-members': '' },
+        `⚡ ${props.liveMembers.join('、')} 在跑`,
       )]
       : []),
     ...(running === undefined && settledUsage !== undefined

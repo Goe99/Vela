@@ -124,6 +124,11 @@ export function SquadTimeline(props: SquadTimelineProps): ReturnType<typeof crea
             ? `在跑 ${compactDuration(duration)}`
             : `${STOP_LABELS[span.stopReason ?? ''] ?? span.stopReason ?? '结果未知'} ${compactDuration(duration)}`,
         ),
+        // 队员干完写的那句总结：验收先看它，不用翻整场会话。还在跑、或队员
+        // 什么也没说时没有——缺了不补占位符，一句假总结比没有更坏。
+        ...(span.summary === undefined
+          ? []
+          : [createElement('div', { key: 'summary', 'data-vela-lane-summary': '' }, span.summary)]),
       )
     }),
     // 这句不是免责声明，是防止有人拿这张图做性能归因（ADR-0019）。

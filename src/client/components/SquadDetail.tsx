@@ -16,6 +16,7 @@ import { createElement, useState } from 'react'
 import type { SquadShape } from '../board-client.ts'
 import type { SquadMember } from '../../domain/squad.ts'
 import { DEFAULT_MAX_PARALLEL_MEMBERS, leaderInstruction } from '../../domain/squad.ts'
+import { ROLE_TEMPLATES, instantiateTemplate } from '../../domain/role-templates.ts'
 import { MemberEditor } from './MemberEditor.tsx'
 
 /** 「沿用全局默认」这个档位选项的哨兵值。\u0000 前缀让它不会撞任何真实档位名。 */
@@ -155,10 +156,26 @@ export function SquadDetail(props: SquadDetailProps): ReturnType<typeof createEl
           { 'data-vela-squad-head': '' },
           createElement('div', { 'data-vela-hint': '' },
             '队长接收派给这支队的第一手任务，再按职责分给队员。工具是队员级的——每个队员只能用自己那几类（跟「设置」里的队级档位不是一回事）。'),
-          createElement('button', {
-            type: 'button',
-            onClick: () => patch({ members: [...draft.members, newMember(draft.members.length)] }),
-          }, '+ 加一个队员'),
+          createElement('div', { 'data-vela-squad-add': '' },
+            // 从模板挑一个角色：名字、职责、能力一次填好，进来之后再细调。
+            createElement('select', {
+              'data-vela-template-pick': '',
+              value: '',
+              'aria-label': '从模板加一个队员',
+              onChange: (event: { target: { value: string } }) => {
+                const template = ROLE_TEMPLATES.find(item => item.id === event.target.value)
+                if (template === undefined) return
+                patch({ members: [...draft.members, instantiateTemplate(template, draft.members.map(m => m.name))] })
+              },
+            },
+            createElement('option', { value: '', disabled: true }, '从模板加…'),
+            ...ROLE_TEMPLATES.map(template =>
+              createElement('option', { key: template.id, value: template.id }, template.label))),
+            createElement('button', {
+              type: 'button',
+              onClick: () => patch({ members: [...draft.members, newMember(draft.members.length)] }),
+            }, '+ 空白队员'),
+          ),
         ),
         // 队长卡：永远在成员列表最前面。它不是 members 数组里的一条——队长就是
         // 基准 preset 扮演的角色，它的配置就是那段职责说明（draft.instruction）。
@@ -193,7 +210,7 @@ export function SquadDetail(props: SquadDetailProps): ReturnType<typeof createEl
         ),
         ...(draft.members.length === 0
           ? [createElement('div', { key: 'none', 'data-vela-empty': '' },
-            '还没有队员。点右上「+ 加一个队员」——先建一个光杆队长也是正当用法。')]
+            '还没有队员。右上「从模板加…」一键起一个角色，或加空白队员自己写——先建一个光杆队长也是正当用法。')]
           : draft.members.map((member, index) => createElement(MemberEditor, {
             key: index,
             member,

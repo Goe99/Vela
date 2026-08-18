@@ -157,7 +157,10 @@ describe('DSH 自己的解析器能读 Vela 生成的 preset', () => {
     const duty = rows.find(row => row.config?.toolName === 'frontend_dev')?.config?.persona as string
     assert.ok(duty.includes('只改 src/client 下的东西'), '中文必须原样')
     assert.ok(duty.includes('\n结尾留个冒号：'), '换行与冒号必须原样')
-    assert.equal(rows.find(row => row.config?.toolName === 'reviewer')?.config?.persona, '#不要真的当注释处理')
+    // persona = 职责原文 + Vela 追加的结束约定（MEMBER_OUTRO）。这条测的是
+    // 「特殊字符原样穿过序列化」，所以断前缀不断全等。
+    const reviewer = rows.find(row => row.config?.toolName === 'reviewer')?.config?.persona as string
+    assert.ok(reviewer.startsWith('#不要真的当注释处理'), '职责原文必须在最前面，一个字不动')
   })
 
   it('队长的职责不再进组合文件——它走开场消息，避免与基准的 persona 行撞车', (t: TestContext) => {

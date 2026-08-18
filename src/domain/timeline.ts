@@ -45,6 +45,11 @@ export interface MemberSpan {
   readonly observedEnd: number | undefined
   /** DSH 给出的停止原因；还在跑时缺省。 */
   readonly stopReason: string | undefined
+  /**
+   * 队员结束时写的一句话总结（它最后一条助手消息的文本）。
+   * 还在跑、或队员什么也没说时缺省。验收卡片时先看这个，不用翻整场会话。
+   */
+  readonly summary?: string
 }
 
 /** 一个 Run 最多记多少条泳道。 */
@@ -96,7 +101,7 @@ export class TimelineRecorder {
    * 进程之前（ADR-0019：漏掉的起跑事件无法追补），凭空造一条没有起点的泳道会画出
    * 一个假的时间段。
    */
-  end(parentSessionId: string, runId: string, at: number, stopReason: string | undefined): void {
+  end(parentSessionId: string, runId: string, at: number, stopReason: string | undefined, summary?: string): void {
     const spans = this.byParent.get(parentSessionId)
     if (spans === undefined) return
     const index = spans.findIndex(span => span.runId === runId)
@@ -104,7 +109,12 @@ export class TimelineRecorder {
     const span = spans[index]!
     // 已经结束过就不再改：第一次结束才是真的。
     if (span.observedEnd !== undefined) return
-    spans[index] = { ...span, observedEnd: at, stopReason }
+    spans[index] = {
+      ...span,
+      observedEnd: at,
+      stopReason,
+      ...(summary === undefined || summary.trim().length === 0 ? {} : { summary }),
+    }
   }
 
   /** 一个父会话的全部泳道，按观察到的起跑时刻升序。 */

@@ -52,6 +52,11 @@ export interface BoardView {
    * 前者是「不是小队 Run」，后者不会出现。
    */
   readonly timelines?: Readonly<Record<string, readonly MemberSpan[]>>
+  /**
+   * 每张卡此刻在跑的队员名单，按 issue id 索引。没有这个键 = 没有队员在跑。
+   * 后端从时间轴记录器算出（ADR-0019），前端直接显示，不自己算。
+   */
+  readonly liveMembers?: Readonly<Record<string, readonly string[]>>
 }
 
 /**
@@ -84,6 +89,26 @@ function readSquads(value: unknown): readonly SquadShape[] {
   return Array.isArray(value) ? (value as SquadShape[]) : []
 }
 
+/** 时间轴与在跑名单是「会话 id → 数组」的映射。逐项校验太重——，这里做的是
+ * 「形状是对象就透传」——泳道内部形状由时间轴组件自己面对。 */
+function readTimelines(value: unknown): Readonly<Record<string, readonly MemberSpan[]>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const out: Record<string, readonly MemberSpan[]> = {}
+  for (const [key, spans] of Object.entries(value)) {
+    if (Array.isArray(spans)) out[key] = spans as readonly MemberSpan[]
+  }
+  return out
+}
+
+function readLiveMembers(value: unknown): Readonly<Record<string, readonly string[]>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const out: Record<string, readonly string[]> = {}
+  for (const [key, names] of Object.entries(value)) {
+    if (Array.isArray(names)) out[key] = names.filter((n): n is string => typeof n === 'string')
+  }
+  return out
+}
+
 /** 从一个未经校验的响应体里读出视图；形状不对则 undefined。 */
 function readView(body: unknown): BoardView | undefined {
   if (typeof body !== 'object' || body === null) return undefined
@@ -99,6 +124,12 @@ function readView(body: unknown): BoardView | undefined {
     // 读不到时回落到 linux 而不是报错：这只影响编辑器里展示的工具名，
     // 真正写盘的那份由宿主用自己的平台生成，不靠这个值。
     platform: typeof raw.platform === 'string' ? raw.platform : 'linux',
+    // 时间轴与在跑队员：服务端发出什么就透传什么。这两个字段缺失过一次——
+    // 类型里声明了、服务端发了，唯独这里没抄，于是抽屉的时间轴永远不渲染、
+    // 卡片的「谁在跑」永远不显示。单元测试全是直接构造 props，根本不过这里，
+    // 所以这条接缝必须由 board-client 自己的测试钉住。
+    timelines: readTimelines(raw.timelines),
+    liveMembers: readLiveMembers(raw.liveMembers),
   }
 }
 
