@@ -20,11 +20,15 @@ import { defaultFailure, parseTurnEnd } from './domain/outcome.ts'
 import type { ExecDefaults } from './domain/exec.ts'
 import { resolveExec, validateOverrides } from './domain/exec.ts'
 import type {
-  ApiProxyLike, Dispose, PermissionPresetsLike, SessionEventLike, SessionStoreLike,
+  ApiProxyLike, AssistantMessageData, Dispose, PermissionPresetsLike, SessionEventLike,
+  SessionStoreLike, ToolCallData,
 } from './dsh.ts'
 import type { Squad } from './domain/squad.ts'
 import { leaderInstruction } from './domain/squad.ts'
 import type { SquadResult } from './domain/squad-store.ts'
+import type { FileTouch, RecapDelivery, RunFacts } from './domain/okf-recap.ts'
+import { extractDelivery } from './domain/okf-recap.ts'
+import type { MemoryWriter } from './memory.ts'
 
 /**
  * 展开能力白名单用的平台。队长的开场名册要括号列出每个队员可用的工具，
@@ -72,6 +76,11 @@ export interface RunnerDeps {
    * 丢掉。缺失表示号牌层没挂上（那时本来就没有队列）。
    */
   readonly slots?: () => SlotDrain
+  /**
+   * 记忆库（ADR-0022）。**缺失表示没配 `memoryPath`**，此时整条落盘路径
+   * 一行也不执行，派活文本也与从前一字不差。
+   */
+  readonly memory?: () => MemoryWriter | undefined
   /** 计时器，注入以便测试不真的等。 */
   readonly setTimer: (fn: () => void, ms: number) => unknown
   readonly clearTimer: (handle: unknown) => void
@@ -91,11 +100,27 @@ export interface DispatchResult {
  */
 const CANCEL_GRACE_MS = 30_000
 
+/**
+ * 读文件的工具叫什么。
+ *
+ * 取证自真跑日志（票 01）：工具名 `read`，文件路径在参数的 `file_path` 键上。
+ * 写文件的工具名尚未取证，因此「写次数」按「除 read 外带 file_path 的调用」统计。
+ */
+const READ_TOOL = 'read'
+
+/** 命令最多记几条。一次执行跑上百条命令时，全记下来只会把复盘淡成日志。 */
+const MAX_COMMANDS = 20
+
+/** 一条命令最多留多长。 */
+const COMMAND_CLIP = 200
+
 /** 一次进行中的 Run 的在途状态。**不落盘**（ADR-0011）。 */
 interface InFlight {
   readonly issueId: string
   readonly runId: string
   readonly sessionId: string
+  /** 起跑时刻，算耗时用。 */
+  readonly startedAt: number
   /**
    * 这次派给了哪支小队（小队 id）；没派给小队时 undefined。
    *
@@ -105,6 +130,19 @@ interface InFlight {
   readonly squadId: string | undefined
   /** 实时累计用量，仅供展示；Run 结束时才写入快照。 */
   usage: TokenUsage | undefined
+  /**
+   * 这次碰过的文件：绝对路径 → 读写次数。与用量同款——攒在内存，不落盘。
+   */
+  readonly files: Map<string, { reads: number; writes: number }>
+  /** 跑过的命令（已截断）。 */
+  readonly commands: string[]
+  /**
+   * 最后一条 assistant 消息里的正文。
+   *
+   * 只留最新的一条而不是全部：收尾块在最后一条里（ADR-0021），而保留
+   * 整段对话等于在内存里再存一份会话日志。
+   */
+  lastText: string | undefined
   /** 超时已触发：此后 turn/end 应记为 timeout 而非 aborted。 */
   timedOut: boolean
   timeout: unknown
@@ -283,8 +321,12 @@ export class Runner {
       issueId,
       runId,
       sessionId,
+      startedAt: this.deps.now(),
       squadId: squad?.id,
       usage: undefined,
+      files: new Map(),
+      commands: [],
+      lastText: undefined,
       timedOut: false,
       timeout: undefined,
       grace: undefined,
@@ -314,7 +356,15 @@ export class Runner {
 
     const prompted = await api.sessions.prompt({
       rpcId: this.deps.newId(),
-      payload: { sessionId, mode: 'queue', content: [{ type: 'text', text: buildPrompt(issue, squad) }] },
+      payload: {
+        sessionId,
+        mode: 'queue',
+        content: [{
+          type: 'text',
+          // 没配记忆库时不加收尾要求：派活文本必须与从前一字不差（ADR-0027）。
+          text: buildPrompt(issue, squad, undefined, { closing: this.deps.memory?.() !== undefined }),
+        }],
+      },
     }).catch((error: unknown) => ({
       rpcId: '',
       result: { ok: false as const, error: { code: 'internal', message: String(error) } },
@@ -346,8 +396,9 @@ export class Runner {
   }
 
   /**
-   * 消费一条会话事件。只认两类：assistant/message 累计用量，turn/end 结算。
-   * 与本执行器无关的会话原样忽略——这是宿主的全局事件流。
+   * 消费一条会话事件。认三类：assistant/message 累计用量并留下正文，
+   * tool/call 记下足迹，turn/end 结算。与本执行器无关的会话原样忽略——这是
+   * 宿主的全局事件流。
    */
   observe(sessionId: string, event: SessionEventLike): void {
     const entry = this.inFlight.get(sessionId)
@@ -357,6 +408,14 @@ export class Runner {
       if (usage !== undefined) {
         entry.usage = entry.usage === undefined ? usage : addUsage(entry.usage, usage)
       }
+      // 正文与用量住在同一个事件上（票 01 取证）。这一次 cast 是诚实的：
+      // `dsh.ts` 里那个形状是对着真跑日志声明的，读不到字段时退化成「没取到」。
+      const text = assistantText(event.data as AssistantMessageData | undefined)
+      if (text.length > 0) entry.lastText = text
+      return
+    }
+    if (event.type === 'tool/call') {
+      noteToolCall(entry, event.data as ToolCallData | undefined)
       return
     }
     if (event.type !== 'turn/end') return
@@ -451,6 +510,13 @@ export class Runner {
       }, this.deps.now())
       return result.ok ? { board: result.value, value: undefined } : undefined
     })
+    // 复盘落盘接在结算之后：快照是真相，一篇复盘没写成不能拖垮结算。
+    // 也必须在自动重试**之前**——否则第 N 次的复盘会晚于第 N+1 次开跑。
+    await this.landRecap(entry, outcome, failure).catch((error: unknown) => {
+      this.deps.logger?.warn(
+        `vela: 复盘没落盘（issue ${entry.issueId}）：${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
     if (outcome === 'completed') return
     const issue = this.deps.store.snapshot().issues.find(candidate => candidate.id === entry.issueId)
     if (issue !== undefined && shouldAutoRetry(issue)) {
@@ -467,6 +533,39 @@ export class Runner {
     if (entry.timeout !== undefined) this.deps.clearTimer(entry.timeout)
     if (entry.grace !== undefined) this.deps.clearTimer(entry.grace)
     this.inFlight.delete(sessionId)
+  }
+
+  /**
+   * 把这次执行落成一篇复盘。没配记忆库时直接返回，一行也不执行。
+   *
+   * 正文只在**成功收尾**时取 Agent 的交付（ADR-0026）：失败与中断的执行
+   * 收尾回复常常只有半句话或根本没有，拿它当经验会污染召回。
+   */
+  private async landRecap(entry: InFlight, outcome: RunOutcome, failure: string | undefined): Promise<void> {
+    const memory = this.deps.memory?.()
+    if (memory === undefined) return
+    const issue = this.deps.store.snapshot().issues.find(candidate => candidate.id === entry.issueId)
+    if (issue === undefined) return
+    const at = this.deps.now()
+    const seq = issue.runs.findIndex(run => run.id === entry.runId)
+    const facts: RunFacts = {
+      issueNumber: issue.number,
+      runSeq: seq < 0 ? issue.runs.length : seq + 1,
+      sessionId: entry.sessionId,
+      workspace: issue.workspace,
+      title: issue.title,
+      outcome,
+      ...(failure === undefined ? {} : { failure }),
+      startedAt: entry.startedAt,
+      endedAt: at,
+      ...(entry.usage === undefined ? {} : { usage: entry.usage }),
+      files: touchedFiles(entry),
+      commands: [...entry.commands],
+    }
+    const delivery: RecapDelivery | undefined = outcome === 'completed' && entry.lastText !== undefined
+      ? extractDelivery(entry.lastText)
+      : undefined
+    await memory.landRecap(facts, delivery, at)
   }
 
   /**
@@ -501,28 +600,123 @@ export class Runner {
 }
 
 /**
+ * 一条 assistant 消息里的全部文本块拼起来。
+ *
+ * 只取 `type === 'text'` 的块：同一条消息里还会有 reasoning 与 tool-call 块
+ * （票 01 取证），前者是思考过程、后者是调用参数，那两样都不是交付。
+ */
+function assistantText(data: AssistantMessageData | undefined): string {
+  const blocks = data?.message?.content
+  if (blocks === undefined) return ''
+  const texts: string[] = []
+  for (const block of blocks) {
+    if (block?.type === 'text' && typeof block.text === 'string') texts.push(block.text)
+  }
+  return texts.join('\n').trim()
+}
+
+/**
+ * 记下一次工具调用的足迹。
+ *
+ * 参数读不懂时安静跳过：足迹是尽力而为的记录，少一条比把整次执行弄崩好。
+ * “写”的判定是「除 read 外带 file_path 的调用」——写文件的工具名尚未取证（票 01）。
+ */
+function noteToolCall(entry: InFlight, data: ToolCallData | undefined): void {
+  const name = data?.name
+  if (typeof name !== 'string' || name.length === 0) return
+  let args: Record<string, unknown> = {}
+  if (typeof data?.arguments === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(data.arguments)
+      if (typeof parsed === 'object' && parsed !== null) args = parsed as Record<string, unknown>
+    } catch {
+      // 参数不是 JSON 就当没有参数。
+    }
+  }
+  const path = args.file_path
+  if (typeof path === 'string' && path.length > 0) {
+    const touch = entry.files.get(path) ?? { reads: 0, writes: 0 }
+    if (name === READ_TOOL) touch.reads += 1
+    else touch.writes += 1
+    entry.files.set(path, touch)
+  }
+  const command = args.command
+  if (typeof command === 'string' && command.length > 0 && entry.commands.length < MAX_COMMANDS) {
+    entry.commands.push(command.length > COMMAND_CLIP ? `${command.slice(0, COMMAND_CLIP)}…` : command)
+  }
+}
+
+/** 在途状态里的文件足迹整理成确定顺序的清单。 */
+function touchedFiles(entry: InFlight): readonly FileTouch[] {
+  return [...entry.files]
+    .map(([path, touch]) => ({ path, reads: touch.reads, writes: touch.writes }))
+    .sort((left, right) => left.path.localeCompare(right.path))
+}
+
+/**
+ * 附在派活文本末尾的收尾要求（ADR-0021 / ADR-0027）。
+ *
+ * 最后一句是必要的：把「你无权宣布自己可信」直接告诉 Agent，比等它写了
+ * 再在解析时默默丢掉要诚实——两头都做，但只靠后者会让它反复写一个没用的字段。
+ */
+const CLOSING_REQUIREMENT = [
+  '## 收尾要求',
+  '',
+  '做完之后，在你最后一条消息里附一个 `vela-recap` 围栏块，按下面三个小标题分段：',
+  '',
+  '```vela-recap',
+  '## 结论',
+  '（这次的结果，一两句话）',
+  '## 做了什么',
+  '（关键改动）',
+  '## 坑与注意',
+  '（下一个人该知道的事；没有就写「无」）',
+  '```',
+  '',
+  '这段会被存进记忆库，经人验收后成为以后派活时的参考。不要在块里写状态或验收字段——那由验收决定，不由你声明。',
+].join('\n')
+
+/** 拼派活文本时的可选项。 */
+export interface PromptOptions {
+  /**
+   * 要不要附上收尾要求。没配记忆库时为假：那时没有任何地方存这篇复盘，
+   * 而派活文本必须与从前一字不差。
+   */
+  readonly closing?: boolean
+}
+
+/**
  * 交给 Agent 的任务文本。标题是要做的事，描述是补充，两者都原样给出。
  *
  * 普通卡不包装任何指令——Agent 的行为应由 preset 决定，不由 Vela 悄悄注入。
- *
- * **派给小队的卡是开了一个口子的例外。** 队长的职责与队员名册会前置到任务前面。
- * 这不是选择而是接缝形状逼的：那两样东西本应是系统设定，但基准 preset 已经占了
- * `deployment:persona` 那个段名，而那一行删不掉（详见 leaderInstruction）。
+ * **两处刻意的例外**：派给小队的卡前置队长职责与名册（接缝形状逼的，详见
+ * `leaderInstruction`）；开了记忆库时附一段收尾要求（ADR-0027）。两者都带明确标题
+ * 并用分隔线隔开，因此“哪一段是 Vela 加的”对人和 Agent 都看得出来。
  *
  * @param squad - 派给的小队；缺省表示这张卡没指定小队。
  * @param platform - 展开能力白名单用的平台；缺省用当前进程的。
+ * @param options - 额外要附上的段落。
  */
-export function buildPrompt(issue: Issue, squad?: Squad, platform?: string): string {
+export function buildPrompt(
+  issue: Issue,
+  squad?: Squad,
+  platform?: string,
+  options?: PromptOptions,
+): string {
   const description = issue.description.trim()
   const task = description.length === 0 ? issue.title : `${issue.title}\n\n${description}`
-  if (squad === undefined) return task
-  // 队长的职责与队员名册只能走开场消息，不能走系统设定：基准 preset 已经占了
-  // `deployment:persona` 那个段名，再注册一份会直接抛错（见 leaderInstruction）。
-  const briefing = leaderInstruction(squad, platform ?? PLATFORM).trim()
-  if (briefing.length === 0) return task
-  // 职责在前、任务在后，中间用一个明确的分隔：名册里带着 Markdown 标题，不分
-  // 隔的话卡片描述看起来会像名册的一部分。
-  return `${briefing}\n\n---\n\n## 本次的任务\n\n${task}`
+  const sections: string[] = []
+  if (squad !== undefined) {
+    // 队长的职责与队员名册只能走开场消息，不能走系统设定：基准 preset 已经占了
+    // `deployment:persona` 那个段名，再注册一份会直接抛错（见 leaderInstruction）。
+    const briefing = leaderInstruction(squad, platform ?? PLATFORM).trim()
+    if (briefing.length > 0) sections.push(briefing)
+  }
+  if (options?.closing === true) sections.push(CLOSING_REQUIREMENT)
+  // 一段都没有要加时原样交出任务：例外只在真的有东西要加时才成立。
+  if (sections.length === 0) return task
+  // 分隔必要：名册里带着 Markdown 标题，不隔的话卡片描述看起来会像名册的一部分。
+  return `${sections.join('\n\n---\n\n')}\n\n---\n\n## 本次的任务\n\n${task}`
 }
 
 /** 能消费会话事件的东西。`Runner` 实现它。 */

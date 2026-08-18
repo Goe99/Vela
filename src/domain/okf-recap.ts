@@ -18,7 +18,7 @@
 import type { RunOutcome, TokenUsage } from './types.ts'
 import type { Frontmatter, OkfRecord, OkfValue } from './okf-frontmatter.ts'
 import {
-  parseDocument, serializeDocument, readList, readRecords, readString,
+  parseDocument, serializeDocument, readList, readRecord, readRecords, readString,
 } from './okf-frontmatter.ts'
 
 /** 本轮唯一的概念类型。 */
@@ -113,6 +113,10 @@ export interface Recap {
   readonly verifiedAt?: string
   /** 被召回展开过几次（`sources[0].usage_count`）。 */
   readonly usageCount: number
+  /** 这篇属于哪个 Workspace（给索引与召回筛选用）。 */
+  readonly workspace?: string
+  /** 卡号，缺失表示这篇不是 Vela 写的。 */
+  readonly issueNumber?: number
 }
 
 /** 判断一个 actor 是不是人。 */
@@ -319,6 +323,8 @@ function velaRunRecord(facts: RunFacts): OkfRecord {
     issue: facts.issueNumber,
     run_seq: facts.runSeq,
     session_id: facts.sessionId,
+    // 给索引用：目录名里的短哈希不可逆，而索引要摆出人看得懂的路径。
+    workspace: facts.workspace,
     outcome: facts.outcome,
     duration_ms: Math.max(0, facts.endedAt - facts.startedAt),
     repeated_reads: repeatedReadsOf(facts.files),
@@ -422,10 +428,12 @@ export function readRecap(text: string): Recap {
     return typeof count === 'number' && count > max ? count : max
   }, 0)
   const staleAfter = readString(frontmatter, 'stale_after')
-  const generated = frontmatter.get('generated')
-  const generatedAt = generated !== undefined && !Array.isArray(generated) && typeof generated === 'object'
-    ? generated.at
-    : undefined
+  // 用 `readRecord` 而不是手写形状判断：数组也有 `.at` 方法，直接读
+  // `generated.at` 会在类型上静默通过却拿到一个函数。
+  const generatedAt = readRecord(frontmatter, 'generated')?.at
+  const runRecord = readRecord(frontmatter, 'vela_run')
+  const workspace = runRecord?.workspace
+  const issueNumber = runRecord?.issue
   return {
     frontmatter,
     body,
@@ -438,6 +446,8 @@ export function readRecap(text: string): Recap {
     ...(typeof generatedAt === 'string' ? { generatedAt } : {}),
     ...(typeof lastVerified?.at === 'string' ? { verifiedAt: lastVerified.at } : {}),
     usageCount,
+    ...(typeof workspace === 'string' ? { workspace } : {}),
+    ...(typeof issueNumber === 'number' ? { issueNumber } : {}),
   }
 }
 

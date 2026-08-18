@@ -16,6 +16,7 @@ import { SQUAD_ID_PREFIX } from './domain/squad.ts'
 import { VELA_PROVIDER_PREFIX, installSlottedProviders } from './squad-provider.ts'
 import type { SubagentsServiceLike } from './squad-provider.ts'
 import { Runner, observeSessions } from './runner.ts'
+import { MemoryStore } from './memory.ts'
 import type { ExecDefaults } from './domain/exec.ts'
 import type { DocumentTarget } from './domain/nav.ts'
 import type { HttpRequest, HttpResponse, VelaContext } from './dsh.ts'
@@ -41,6 +42,14 @@ export interface Config {
    * 调整的值都属于这里而不是源码常量。
    */
   exec?: ExecDefaults
+  /**
+   * 记忆库目录的绝对路径（ADR-0022）。
+   *
+   * **缺省时记忆功能整体不启用**：不建目录、不写文件，派活文本也与从前
+   * 一字不差。一个会自己建目录、自己往里写文件的功能，必须由 Operator 明确开启。
+   * 与 `boardPath` 同款：不回落 `process.cwd()`，也不去猜 DSH 的家目录。
+   */
+  memoryPath?: string
   /**
    * 同时在跑的 Run 上限（ADR-0018）。跑满时派活被**拒绝**并告知原因，
    * 而不是排队——排队会造出一个 Board 上看不见的第七种状态。
@@ -193,6 +202,18 @@ export function apply(ctx: VelaContext, config: Config): void {
     // 下来只会让人以为它是完整的。
     const timeline = new TimelineRecorder()
 
+    // 记忆库：没配路径就根本不建这个对象，于是整条落盘路径一行也不跑（ADR-0022）。
+    // 路径不合法时只记一句并关掉记忆功能，而不是让整个插件起不来——看看看板、
+    // 建卡、派活在没有记忆时仍然完全成立。
+    let memory: MemoryStore | undefined
+    if (config.memoryPath !== undefined) {
+      try {
+        memory = MemoryStore.open(config.memoryPath)
+      } catch (error) {
+        ctx.logger?.warn(`[vela] 记忆库没启用：${describe(error)}`)
+      }
+    }
+
     // 号牌池：每支队同时在跑的队员数的硬上限（ADR-0018）。建在这里而不是
     // squads 里面：它要给 provider 层用，而那一层与看板持久化无关。
     const slots = new SlotPool({
@@ -242,6 +263,7 @@ export function apply(ctx: VelaContext, config: Config): void {
         sessions: () => ctx.get('sessions'),
         squads: () => squads,
         slots: () => slots,
+        memory: () => memory,
         setTimer: (fn, ms) => {
           const handle = setTimeout(() => { timers.delete(handle); fn() }, ms)
           timers.add(handle)
