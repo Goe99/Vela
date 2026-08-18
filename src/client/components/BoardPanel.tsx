@@ -12,12 +12,13 @@
 
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { VelaInjected } from '../index.ts'
-import type { BoardView } from '../board-client.ts'
+import type { BoardView, SkillsView } from '../board-client.ts'
 import type { NavView } from '../../domain/nav.ts'
 import { searchIssues } from '../../domain/search.ts'
 import { BoardGrid } from './BoardGrid.tsx'
 import { IssueDrawer } from './IssueDrawer.tsx'
 import { PanelSidebar } from './PanelSidebar.tsx'
+import { SkillsPage } from './SkillsPage.tsx'
 import { SquadsPage } from './SquadsPage.tsx'
 
 /**
@@ -51,6 +52,11 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
    * 「正在跑」）。
    */
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
+  // 技能广场的数据不进看板视图：它与卡片无关，只在切到技能页时才拉。
+  // `undefined` + failed 区分「还没拉过 / 拉取失败 / 真的没装」三种状态。
+  const [skillsView, setSkillsView] = useState<SkillsView | undefined>(undefined)
+  const [skillsFailed, setSkillsFailed] = useState(false)
+  const [skillsLoading, setSkillsLoading] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -62,6 +68,24 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
     const next = await client.refresh()
     if (next !== undefined) setView(next)
   }, [client])
+
+  // 技能清单每次切进技能页都重拉（一次 readdir 很便宜），但不跟着看板的两秒
+  // 轮询走——技能目录不会一秒一变，拉太勤只是噪声。
+  const refreshSkills = useCallback(async () => {
+    setSkillsLoading(true)
+    try {
+      const next = await client.listSkills()
+      setSkillsFailed(next === undefined)
+      if (next !== undefined) setSkillsView(next)
+    } finally {
+      setSkillsLoading(false)
+    }
+  }, [client])
+
+  useEffect(() => {
+    if (!isOpen || nav !== 'skills') return
+    void refreshSkills()
+  }, [isOpen, nav, refreshSkills])
 
   // 打开时轮询，关闭时停。in-flight guard 在 client 内，这里只管调度。
   useEffect(() => {
@@ -154,7 +178,7 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
       ...(notice === undefined
         ? []
         : [createElement('span', { key: 'notice', 'data-vela-notice': '' }, notice)]),
-      ...(nav === 'squads'
+      ...(nav === 'squads' || nav === 'skills'
         ? []
         : [createElement(
           'label',
@@ -171,7 +195,7 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
             ? [createElement('span', { key: 'hits', 'data-vela-search-hits': '' }, `${visible.length} 张`)]
             : []),
         )]),
-      ...(nav === 'squads'
+      ...(nav === 'squads' || nav === 'skills'
         ? []
         : [createElement(
           'label',
@@ -216,6 +240,13 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
           client,
           onChanged: refresh,
         })
+        : nav === 'skills'
+          ? createElement(SkillsPage, {
+            ...(skillsView === undefined ? {} : { view: skillsView }),
+            failed: skillsFailed,
+            loading: skillsLoading,
+            onRefresh: () => { void refreshSkills() },
+          })
         // 搜索无结果时不渲六条空泳道：那看起来像看板被清空了，而不是搜索没命中（票 11）。
         : searching && visible.length === 0
           ? createElement(

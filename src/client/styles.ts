@@ -1771,6 +1771,103 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   opacity: .5;
   cursor: not-allowed;
 }
+
+/* ── 技能广场 ────────────────────────────────────────────── */
+
+[data-vela-skills] {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 18px;
+}
+
+[data-vela-skills] h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+[data-vela-skills] h3 {
+  margin: 0;
+  font-size: 12px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-skill-head] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+[data-vela-skill-head] h2 { flex: 1 1 auto; }
+
+[data-vela-skill-group] { margin-bottom: 14px; }
+
+[data-vela-skill-hint] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+  margin: 3px 0 7px;
+}
+
+[data-vela-skill-row] {
+  padding: 9px 11px;
+  margin-bottom: 7px;
+  border: 1px solid var(--vela-line-soft);
+  border-radius: 7px;
+  background: var(--vela-card);
+  box-shadow: var(--vela-card-shadow);
+}
+
+/* 被同名盖住的技能整行调淡：它还在磁盘上，但生效的不是它。 */
+[data-vela-skill-row][data-dim='true'] { opacity: .55; }
+
+[data-vela-skill-main] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+[data-vela-skill-title] {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+[data-vela-skill-title] code {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+[data-vela-skill-desc] {
+  font-size: 12px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-skill-desc][data-vela-muted] { color: var(--vela-text-3); }
+
+[data-vela-skill-when] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+}
+
+[data-vela-skill-problem] {
+  font-size: 12px;
+  color: var(--vela-warn);
+}
+
+[data-vela-skill-path] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+  word-break: break-all;
+}
+
+[data-vela-skill-footer] {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--vela-text-3);
+}
 `
 
 /**

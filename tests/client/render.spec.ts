@@ -21,6 +21,7 @@ import { BoardGrid } from '../../src/client/components/BoardGrid.tsx'
 import type { BoardGridProps } from '../../src/client/components/BoardGrid.tsx'
 import { EditIssueForm } from '../../src/client/components/EditIssueForm.tsx'
 import { PanelSidebar } from '../../src/client/components/PanelSidebar.tsx'
+import { SkillsPage } from '../../src/client/components/SkillsPage.tsx'
 import { SquadsPage } from '../../src/client/components/SquadsPage.tsx'
 import { NAV_ITEMS } from '../../src/domain/nav.ts'
 import type { Squad } from '../../src/domain/squad.ts'
@@ -270,12 +271,11 @@ describe('PanelSidebar', () => {
     }
   })
 
-  it('置灏项真的不可点，且两种原因分开标注', () => {
+  it('置灏项真的不可点，且原因标注出来', () => {
     const html = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps()))
-    assert.ok(/data-vela-nav-item="skills"[^>]*disabled/.test(html)
-      || /disabled[^>]*data-vela-nav-item="skills"/.test(html), 'skills 应不可点')
-    assert.ok(html.includes('data-disabled-reason="no-such-page"'), 'skills 的原因是「没这个页」')
-    assert.ok(html.includes('data-disabled-reason="not-yet"'), '另三项的原因是「还没做」')
+    // 技能已是 Vela 自己画的真视图（技能广场），不再置灰。
+    assert.ok(!/data-vela-nav-item="skills"[^>]*disabled/.test(html), 'skills 应可点')
+    assert.ok(html.includes('data-disabled-reason="not-yet"'), '置灰项的原因是「还没做」')
   })
 
   it('待处理为 0 时不显徐标，大于 0 时显数字', () => {
@@ -335,5 +335,63 @@ describe('SquadsPage', () => {
     const html = renderToStaticMarkup(createElement(SquadsPage, pageProps({ canManage: false })))
     assert.ok(html.includes('squadRoot'), '要告知怎么改')
     assert.ok(!html.includes('新建小队'), '不能给一个点了就报错的按钮')
+  })
+})
+
+describe('SkillsPage', () => {
+  const pageProps = (overrides: Record<string, unknown> = {}) => ({
+    failed: false,
+    loading: false,
+    onRefresh: () => undefined,
+    ...overrides,
+  })
+
+  const skill = {
+    name: 'asu',
+    description: '简历酥化',
+    userOnly: false,
+    source: 'agents' as const,
+    sourcePath: '/home/x/.agents/skills/asu/SKILL.md',
+    effective: true,
+  }
+
+  it('还没拉到时显示「正在扫」，不是空白', () => {
+    const html = renderToStaticMarkup(createElement(SkillsPage, pageProps()))
+    assert.ok(html.includes('正在扫'))
+  })
+
+  it('拉取失败显示错误与重试，而不是假装一个也没装', () => {
+    const html = renderToStaticMarkup(createElement(SkillsPage, pageProps({ failed: true })))
+    assert.ok(html.includes('拉取失败'))
+    assert.ok(!html.includes('还没有装技能'))
+  })
+
+  it('空清单给出安装指引', () => {
+    const html = renderToStaticMarkup(createElement(SkillsPage, pageProps({ view: { available: true, skills: [] } })))
+    assert.ok(html.includes('还没有装技能'))
+    assert.ok(html.includes('.dsh/skills'), '要告知技能装在哪')
+  })
+
+  it('按来源分组列出技能，被盖住的标出来', () => {
+    const html = renderToStaticMarkup(createElement(SkillsPage, pageProps({
+      view: {
+        available: true,
+        skills: [
+          skill,
+          { ...skill, source: 'dsh' as const, sourcePath: '/home/x/.dsh/skills/asu/SKILL.md', effective: false },
+        ],
+      },
+    })))
+    assert.ok(html.includes('/asu'))
+    assert.ok(html.includes('共享目录'))
+    assert.ok(html.includes('DSH 目录'))
+    assert.ok(html.includes('被同名盖住'))
+  })
+
+  it('读不懂的技能把原因摆出来，不是悄悄不列', () => {
+    const html = renderToStaticMarkup(createElement(SkillsPage, pageProps({
+      view: { available: true, skills: [{ ...skill, problem: '头部里没有 name' }] },
+    })))
+    assert.ok(html.includes('头部里没有 name'))
   })
 })

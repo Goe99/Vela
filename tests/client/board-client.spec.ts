@@ -185,3 +185,57 @@ describe('BoardClient 写操作', () => {
     assert.ok(paths[0]?.endsWith('/issues/a%2Fb%3Fc'), paths[0])
   })
 })
+
+describe('BoardClient 技能广场', () => {
+  const skillBody = {
+    ok: true,
+    available: true,
+    skills: [{
+      name: 'asu',
+      description: '简历酥化',
+      userOnly: false,
+      source: 'agents',
+      sourcePath: '/home/x/.agents/skills/asu/SKILL.md',
+      effective: true,
+    }],
+  }
+
+  it('打到 /skills 并读出清单', async () => {
+    const paths: string[] = []
+    const client = new BoardClient(async (input) => {
+      paths.push(input)
+      return { ok: true, status: 200, json: async () => skillBody }
+    })
+    const view = await client.listSkills()
+    assert.ok(paths[0]?.endsWith('/skills'), paths[0])
+    assert.equal(view?.available, true)
+    assert.equal(view?.skills.length, 1)
+    assert.equal(view?.skills[0]?.name, 'asu')
+  })
+
+  it('形状不齐的条目丢掉，而不是拖垮整张清单', async () => {
+    const client = new BoardClient(fakeFetch([{
+      ok: true,
+      status: 200,
+      body: { available: true, skills: [skillBody.skills[0], { noName: true }, 'garbage'] },
+    }]))
+    const view = await client.listSkills()
+    assert.equal(view?.skills.length, 1)
+  })
+
+  it('拉取失败返回 undefined——「拉取失败」与「一个也没装」是两回事', async () => {
+    const client = new BoardClient(fakeFetch(['throw']))
+    assert.equal(await client.listSkills(), undefined)
+    const denied = new BoardClient(fakeFetch([{ ok: false, status: 500, body: {} }]))
+    assert.equal(await denied.listSkills(), undefined)
+  })
+
+  it('available 缺省按开着算；显式 false 才算没开', async () => {
+    const client = new BoardClient(fakeFetch([
+      { ok: true, status: 200, body: { skills: [] } },
+      { ok: true, status: 200, body: { available: false, skills: [] } },
+    ]))
+    assert.equal((await client.listSkills())?.available, true)
+    assert.equal((await client.listSkills())?.available, false)
+  })
+})

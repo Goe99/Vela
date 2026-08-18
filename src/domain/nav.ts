@@ -9,8 +9,9 @@
  * ## 这里没有「跳转到某个 DSH 页面」
  *
  * 对着实际安装的运行时查过：DSH 不给第三方插件任何页面导航能力（没有 router，
- * `ctx.layout` 只改面板几何）。设置页是一堆插槽而非可导航目标，Skills 更是
- * 压根没有独立页面。所以可用的动作只有下面这四种。
+ * `ctx.layout` 只改面板几何）。设置页是一堆插槽而非可导航目标。技能页 DSH 也
+ * 没有——所以「技能」是 Vela **自己画**的第四个视图（技能广场），而不是跳转。
+ * 可用的动作只有下面这四种。
  */
 
 /** 一项导航背后到底发生什么。 */
@@ -28,7 +29,7 @@ export type NavAction =
   | { readonly kind: 'disabled'; readonly reason: 'not-yet' | 'no-such-page'; readonly note: string }
 
 /** Vela 自己画的视图。 */
-export type NavView = 'board' | 'attention' | 'squads'
+export type NavView = 'board' | 'attention' | 'squads' | 'skills'
 
 /** 可交给 DSH 打开的配置文件。 */
 export type DocumentTarget = 'settings' | 'agent-presets'
@@ -133,11 +134,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
     key: 'skills',
     group: 'configure',
     label: '技能',
-    action: {
-      kind: 'disabled',
-      reason: 'no-such-page',
-      note: 'DSH 没有独立的技能页面——技能是渲在对话里的，没有可去的地方',
-    },
+    // DSH 没有技能页面（技能是渲在对话里的），所以 Vela 自己画一个只读的
+    // 技能广场：这个部署装了哪些技能，一眼能看到。
+    action: { kind: 'view', view: 'skills' },
   },
   {
     key: 'settings',

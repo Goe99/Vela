@@ -51,11 +51,11 @@ describe('导航归属表', () => {
       if (item.action.kind !== 'disabled') throw new Error('unreachable')
       assert.ok(item.action.note.length > 0, `${item.key} 的置灰要写原因`)
     }
-    // Skills 是「DSH 没有这个页面可去」，不是「我们还没做」。混了会让 Operator
-    // 误以为是 Vela 欠工（ADR-0020 的 Consequences 明确要求分开）。
+    // 技能曾经是「DSH 没有这个页面可去」的置灰位；现在 Vela 自己画技能广场，
+    // 它必须是一个真视图而不是置灰项。
     const skills = NAV_ITEMS.find(item => item.key === 'skills')
-    assert.equal(skills?.action.kind, 'disabled')
-    if (skills?.action.kind === 'disabled') assert.equal(skills.action.reason, 'no-such-page')
+    assert.equal(skills?.action.kind, 'view')
+    if (skills?.action.kind === 'view') assert.equal(skills.action.view, 'skills')
 
     for (const key of ['projects', 'autopilots', 'usage']) {
       const item = NAV_ITEMS.find(candidate => candidate.key === key)
@@ -72,9 +72,9 @@ describe('导航归属表', () => {
     assert.equal(badged[0]?.badge, 'attention')
   })
 
-  it('Vela 自己画的视图恰好是 Board、待你处理、小队三处', () => {
+  it('Vela 自己画的视图恰好是 Board、待你处理、小队、技能四处', () => {
     const views = new Set(NAV_ITEMS.map(viewFor).filter(view => view !== undefined))
-    assert.deepEqual([...views].sort(), ['attention', 'board', 'squads'])
+    assert.deepEqual([...views].sort(), ['attention', 'board', 'skills', 'squads'])
   })
 
   it('聊天是「关掉自己的面板」而不是某种跳转——DSH 没有编程式切页', () => {
