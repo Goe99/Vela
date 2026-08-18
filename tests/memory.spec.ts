@@ -396,3 +396,85 @@ describe('执行器落复盘', () => {
     assert.match(harness.warnings.join('\n'), /盘满了/)
   })
 })
+
+describe('失败与中断只落客观复盘', () => {
+  /** 跑一次到指定结局，返回落下的那篇。 */
+  async function landedWith(end: SessionEventLike): Promise<{ body: string; text: string; tags: readonly string[] }> {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const harness = await makeHarness(memory)
+    const issue = await card(harness.store)
+    await harness.runner.dispatch(issue.id)
+    harness.emit('ses1', end)
+    await waitFor(async () => (await memory.list()).length > 0, '复盘落盘')
+    const stored = (await memory.list())[0]!
+    return {
+      body: stored.recap!.body,
+      text: (await memory.readFileAt(stored.path))!,
+      tags: stored.recap!.tags,
+    }
+  }
+
+  it('取消标注成取消，而不是笼统的失败', async () => {
+    const landed = await landedWith({
+      seq: 9, type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } },
+    })
+    assert.match(sectionOf(landed.body, '## 结论'), /被取消/)
+    assert.ok(landed.tags.includes('outcome:aborted'))
+  })
+
+  it('撞到 token 上限也有自己的说法', async () => {
+    const landed = await landedWith({
+      seq: 9, type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } },
+    })
+    assert.match(sectionOf(landed.body, '## 结论'), /token 上限/)
+  })
+
+  it('不认识的结束原因归为报错，不会静默当成成功', async () => {
+    // 把未知当成功是最坏的失败模式（outcome.ts 的同一条纪律）。
+    const landed = await landedWith({
+      seq: 9, type: 'turn/end', data: { turn: 1, reason: { kind: '天知道' } },
+    })
+    assert.ok(landed.tags.includes('outcome:error'), `实际标签：${landed.tags.join(' ')}`)
+  })
+
+  it('用量缺失时头部不写 0', async () => {
+    // 本次执行一条 assistant/message 也没有，因此用量未知。
+    const landed = await landedWith(FAILED)
+    assert.doesNotMatch(landed.text, /input_tokens/)
+    assert.match(landed.text, /用量：未知/)
+  })
+
+  it('上一个进程留下的在跑 Run：对账时也落一篇客观复盘', async () => {
+    // 对账路径绕开了结算，很容易漏掉——而「这张卡跑过一次、结果未知」
+    // 正是 Operator 最想在卡上看到的事实之一。
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const first = await makeHarness(memory)
+    const issue = await card(first.store)
+    await first.runner.dispatch(issue.id)
+    // 不发 turn/end，直接当作进程死了：快照里留下一条 running。
+    assert.equal(first.store.snapshot().issues[0]!.runs[0]!.status, 'running')
+    first.runner.dispose()
+
+    // 新进程：同一份快照，全新的执行器。
+    const second = await makeHarness(memory)
+    await second.runner.reconcile()
+    const stored = await memory.list()
+    assert.equal(stored.length, 1)
+    assert.ok(stored[0]!.recap!.tags.includes('outcome:interrupted'))
+    assert.match(sectionOf(stored[0]!.recap!.body, '## 结论'), /结果未知/)
+    // 足迹是空的而不是伪造的：计数只活在上一个进程的内存里。
+    const text = (await memory.readFileAt(stored[0]!.path))!
+    assert.match(text, /files_touched: 0/)
+    assert.doesNotMatch(text, /input_tokens/)
+  })
+
+  it('对账时没配记忆库也不报错', async () => {
+    const first = await makeHarness(undefined)
+    const issue = await card(first.store)
+    await first.runner.dispatch(issue.id)
+    first.runner.dispose()
+    const second = await makeHarness(undefined)
+    await second.runner.reconcile()
+    assert.equal(second.store.snapshot().issues[0]!.runs[0]!.outcome, 'interrupted')
+  })
+})

@@ -14,7 +14,7 @@
 import type { BoardStore } from './domain/store.ts'
 import type { BoardResult } from './domain/board.ts'
 import { activeRun, settleRun, shouldAutoRetry, startRun } from './domain/board.ts'
-import type { Board, Issue, RunOutcome, TokenUsage } from './domain/types.ts'
+import type { Board, Issue, Run, RunOutcome, TokenUsage } from './domain/types.ts'
 import { addUsage, readUsage } from './domain/usage.ts'
 import { defaultFailure, parseTurnEnd } from './domain/outcome.ts'
 import type { ExecDefaults } from './domain/exec.ts'
@@ -113,6 +113,9 @@ const MAX_COMMANDS = 20
 
 /** 一条命令最多留多长。 */
 const COMMAND_CLIP = 200
+
+/** 对账出来的中断执行的失败说明。两处用到（快照与复盘），口径必须一致。 */
+const INTERRUPTED_FAILURE = '上一次进程结束时这次执行仍在进行，结果未知'
 
 /** 一次进行中的 Run 的在途状态。**不落盘**（ADR-0011）。 */
 interface InFlight {
@@ -572,24 +575,55 @@ export class Runner {
    * 启动时对账。上次进程被杀时停在 running 的 Run 不会自己结束——没有这一步
    * 那些卡片会永远停在 Running。它们的用量已随进程丢失，因此**不写用量**：
    * 缺失表示未知，不伪造成 0（ADR-0011）。
+   *
+   * 同样会落一篇**只有客观部分**的复盘（ADR-0026）：这次执行的足迹与正文都随
+   * 进程没了，但「这张卡曾经跑过一次、结果未知」本身就是值得留下的事实。
    */
   async reconcile(): Promise<void> {
     const stale = this.deps.store.snapshot().issues
       .flatMap(issue => issue.runs
         .filter(run => run.status === 'running' && !this.inFlight.has(run.sessionId))
-        .map(run => ({ issueId: issue.id, runId: run.id })))
+        .map(run => ({ issue, run, runSeq: issue.runs.indexOf(run) + 1 })))
     if (stale.length === 0) return
     this.deps.logger?.info(`vela: settling ${stale.length} Run(s) left running by a previous process`)
-    for (const { issueId, runId } of stale) {
+    for (const { issue, run, runSeq } of stale) {
       await this.deps.store.mutate((board) => {
-        const result = settleRun(board, issueId, {
-          runId,
+        const result = settleRun(board, issue.id, {
+          runId: run.id,
           outcome: 'interrupted',
-          failure: '上一次进程结束时这次执行仍在进行，结果未知',
+          failure: INTERRUPTED_FAILURE,
         }, this.deps.now())
         return result.ok ? { board: result.value, value: undefined } : undefined
       })
+      await this.landInterrupted(issue, run, runSeq).catch((error: unknown) => {
+        this.deps.logger?.warn(
+          `vela: 对账出的复盘没落盘（issue ${issue.id}）：${error instanceof Error ? error.message : String(error)}`,
+        )
+      })
     }
+  }
+
+  /**
+   * 给一条对账出来的中断执行落一篇客观复盘。
+   *
+   * 足迹是空的而不是伪造的：那些计数只活在上一个进程的内存里，现在无处可取。
+   */
+  private async landInterrupted(issue: Issue, run: Run, runSeq: number): Promise<void> {
+    const memory = this.deps.memory?.()
+    if (memory === undefined) return
+    await memory.landRecap({
+      issueNumber: issue.number,
+      runSeq,
+      sessionId: run.sessionId,
+      workspace: issue.workspace,
+      title: issue.title,
+      outcome: 'interrupted',
+      failure: INTERRUPTED_FAILURE,
+      startedAt: run.startedAt,
+      endedAt: this.deps.now(),
+      files: [],
+      commands: [],
+    }, undefined, this.deps.now())
   }
 
   /** 清理全部计时器。在途 Run 留在快照里，下次启动由 reconcile 结算。 */
