@@ -18,7 +18,7 @@ import { BoardStore } from '../src/domain/store.ts'
 import { createIssue } from '../src/domain/board.ts'
 import { Runner, observeSessions } from '../src/runner.ts'
 import { MemoryStore } from '../src/memory.ts'
-import type { MemoryGateway, MemoryWriter } from '../src/memory.ts'
+import type { MemoryGateway, MemoryPort } from '../src/memory.ts'
 import { handleApi, API_PREFIX } from '../src/http/routes.ts'
 import type { ApiDeps } from '../src/http/routes.ts'
 import { readRecap, sectionOf } from '../src/domain/okf-recap.ts'
@@ -209,7 +209,7 @@ interface Harness {
 }
 
 /** 起一个执行器；`memory` 缺省表示没配记忆库。 */
-async function makeHarness(memory?: MemoryWriter): Promise<Harness> {
+async function makeHarness(memory?: MemoryPort): Promise<Harness> {
   const store = await BoardStore.open(join(dir, 'board.json'))
   const prompts: string[] = []
   const warnings: string[] = []
@@ -397,7 +397,11 @@ describe('执行器落复盘', () => {
 
   it('落盘失败只记一句，不影响 Run 结算', async () => {
     // 一张卡的复盘没写成，不能把整个 dsh 拖下水（ADR-0021）。
-    const broken: MemoryWriter = { landRecap: async () => { throw new Error('盘满了') } }
+    const broken: MemoryPort = {
+      landRecap: async () => { throw new Error('盘满了') },
+      recallCandidates: async () => [],
+      countUse: async () => undefined,
+    }
     const harness = await makeHarness(broken)
     const issue = await card(harness.store)
     await harness.runner.dispatch(issue.id)
@@ -667,5 +671,86 @@ describe('对账补写人审记录', () => {
   it('文件根本不在时安静跳过', async () => {
     const memory = MemoryStore.open(join(dir, 'mem'))
     assert.equal(await memory.backfillVerified([{ workspace: '/x', issueNumber: 1, runSeq: 1 }], AT), 0)
+  })
+})
+
+describe('召回注入', () => {
+  /** 在库里埋一篇已人审的复盘，返回它的路径。 */
+  async function seedVerified(memory: MemoryStore, title = '上一次的经验'): Promise<string> {
+    const path = await memory.landRecap(
+      facts({ issueNumber: 99, title }),
+      { conclusion: '上次就这么干成的', did: '改了 ordering', pitfalls: 'position 会收敛' },
+      AT,
+    )
+    await memory.verify(path, AT + 1_000)
+    return path
+  }
+
+  it('派活时自动带上经人验收过的经验', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    await seedVerified(memory)
+    const harness = await makeHarness(memory)
+    const issue = await card(harness.store)
+    await harness.runner.dispatch(issue.id)
+    assert.match(harness.prompts[0]!, /## 以前的经验/)
+    assert.match(harness.prompts[0]!, /上一次的经验/)
+    assert.match(harness.prompts[0]!, /position 会收敛/)
+    // 顺序：经验 → 收尾要求 → 任务。
+    assert.ok(harness.prompts[0]!.indexOf('以前的经验') < harness.prompts[0]!.indexOf('收尾要求'))
+    assert.ok(harness.prompts[0]!.indexOf('收尾要求') < harness.prompts[0]!.indexOf('本次的任务'))
+  })
+
+  it('库里只有草稿时一字不注入', async () => {
+    // 候选集只有一种来源：经 Gate 接受过的（ADR-0026）。
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    await memory.landRecap(facts({ issueNumber: 99 }), { conclusion: '没人审过', did: '', pitfalls: '' }, AT)
+    const harness = await makeHarness(memory)
+    const issue = await card(harness.store)
+    await harness.runner.dispatch(issue.id)
+    assert.doesNotMatch(harness.prompts[0]!, /以前的经验/)
+    // 但收尾要求仍在（记忆库开着）。
+    assert.match(harness.prompts[0]!, /收尾要求/)
+  })
+
+  it('展开过的那篇引用计数 +1', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const path = await seedVerified(memory)
+    assert.equal(readRecap((await memory.readFileAt(path))!).usageCount, 0)
+    const harness = await makeHarness(memory)
+    const issue = await card(harness.store)
+    await harness.runner.dispatch(issue.id)
+    await memory.settled()
+    assert.equal(readRecap((await memory.readFileAt(path))!).usageCount, 1)
+  })
+
+  it('召回事实写进这次的复盘，可以事后核对', async () => {
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    await seedVerified(memory)
+    const harness = await makeHarness(memory)
+    const issue = await card(harness.store)
+    await harness.runner.dispatch(issue.id)
+    harness.emit('ses1', COMPLETED)
+    await waitFor(async () => (await memory.list()).length > 1, '本次的复盘')
+    const mine = (await memory.list()).find(item => item.recap?.issueNumber === issue.number)
+    const text = (await memory.readFileAt(mine!.path))!
+    assert.match(text, /recall_indexed: 1/)
+    assert.match(text, /recall_expanded: 1/)
+    assert.match(text, /injected_chars: \d+/)
+    assert.match(text, /recalled_chars: \d+/)
+  })
+
+  it('读候选失败时退化成不注入，派活照常成功', async () => {
+    // 记忆是锦上添花，不是派活的前置条件。
+    const flaky: MemoryPort = {
+      landRecap: async () => 'x.md',
+      recallCandidates: async () => { throw new Error('目录读不了') },
+      countUse: async () => undefined,
+    }
+    const harness = await makeHarness(flaky)
+    const issue = await card(harness.store)
+    const result = await harness.runner.dispatch(issue.id)
+    assert.equal(result.ok, true)
+    assert.doesNotMatch(harness.prompts[0]!, /以前的经验/)
+    assert.match(harness.warnings.join('\n'), /目录读不了/)
   })
 })

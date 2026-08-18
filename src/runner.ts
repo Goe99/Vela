@@ -26,9 +26,11 @@ import type {
 import type { Squad } from './domain/squad.ts'
 import { leaderInstruction } from './domain/squad.ts'
 import type { SquadResult } from './domain/squad-store.ts'
-import type { FileTouch, RecapDelivery, RunFacts } from './domain/okf-recap.ts'
+import type { FileTouch, RecallFacts, RecapDelivery, RunFacts } from './domain/okf-recap.ts'
 import { extractDelivery } from './domain/okf-recap.ts'
-import type { MemoryWriter } from './memory.ts'
+import { selectRecall } from './domain/okf-recall.ts'
+import type { Recall } from './domain/okf-recall.ts'
+import type { MemoryPort } from './memory.ts'
 
 /**
  * 展开能力白名单用的平台。队长的开场名册要括号列出每个队员可用的工具，
@@ -80,7 +82,7 @@ export interface RunnerDeps {
    * 记忆库（ADR-0022）。**缺失表示没配 `memoryPath`**，此时整条落盘路径
    * 一行也不执行，派活文本也与从前一字不差。
    */
-  readonly memory?: () => MemoryWriter | undefined
+  readonly memory?: () => MemoryPort | undefined
   /** 计时器，注入以便测试不真的等。 */
   readonly setTimer: (fn: () => void, ms: number) => unknown
   readonly clearTimer: (handle: unknown) => void
@@ -146,6 +148,8 @@ interface InFlight {
    * 整段对话等于在内存里再存一份会话日志。
    */
   lastText: string | undefined
+  /** 这次注入了多少召回；没有召回时缺失。 */
+  recall: RecallFacts | undefined
   /** 超时已触发：此后 turn/end 应记为 timeout 而非 aborted。 */
   timedOut: boolean
   timeout: unknown
@@ -330,6 +334,7 @@ export class Runner {
       files: new Map(),
       commands: [],
       lastText: undefined,
+      recall: undefined,
       timedOut: false,
       timeout: undefined,
       grace: undefined,
@@ -357,6 +362,18 @@ export class Runner {
       this.deps.logger?.warn(`vela: cannot title session ${sessionId}: ${renamed.result.error.message}`)
     }
 
+    // 召回：只挑这个工作区里经人验收过的复盘（ADR-0026 / 0027）。读不到或没候选
+    // 时退化成「不注入」，而不是让派活失败——记忆是锦上添花，不是前置条件。
+    const recalled = await this.prepareRecall(issue)
+    if (recalled !== undefined) {
+      entry.recall = {
+        indexed: recalled.indexed.length,
+        expanded: recalled.expanded.length,
+        injectedChars: recalled.injectedChars,
+        sourceChars: recalled.sourceChars,
+      }
+    }
+
     const prompted = await api.sessions.prompt({
       rpcId: this.deps.newId(),
       payload: {
@@ -365,7 +382,10 @@ export class Runner {
         content: [{
           type: 'text',
           // 没配记忆库时不加收尾要求：派活文本必须与从前一字不差（ADR-0027）。
-          text: buildPrompt(issue, squad, undefined, { closing: this.deps.memory?.() !== undefined }),
+          text: buildPrompt(issue, squad, undefined, {
+            closing: this.deps.memory?.() !== undefined,
+            ...(recalled === undefined || recalled.text.length === 0 ? {} : { recall: recalled.text }),
+          }),
         }],
       },
     }).catch((error: unknown) => ({
@@ -381,7 +401,41 @@ export class Runner {
     if (exec.timeoutMs > 0) {
       entry.timeout = this.deps.setTimer(() => { void this.onTimeout(sessionId) }, exec.timeoutMs)
     }
+    // 引用计数只在正文真被展开时自增，而且要等任务真的提交成功之后——
+    // 提交失败的那一次，Agent 从未看到这些经验。计数写不上只记一句。
+    if (recalled !== undefined && recalled.expanded.length > 0) {
+      const memory = this.deps.memory?.()
+      const at = this.deps.now()
+      for (const used of recalled.expanded) {
+        await memory?.countUse(used.path, at).catch((error: unknown) => {
+          this.deps.logger?.warn(
+            `vela: 引用计数没写上（${used.path}）：${error instanceof Error ? error.message : String(error)}`,
+          )
+        })
+      }
+    }
     return { ok: true, value: { issueId, runId, sessionId } }
+  }
+
+  /**
+   * 读出这次要注入的召回。没配记忆库、读不到、或一个候选也没有时给 undefined。
+   *
+   * 读失败**不报错**：召回不成应当退化成「这次没带经验」，而不是让 Operator
+   * 派不了活。记忆是锦上添花，不是派活的前置条件。
+   */
+  private async prepareRecall(issue: Issue): Promise<Recall | undefined> {
+    const memory = this.deps.memory?.()
+    if (memory === undefined) return undefined
+    try {
+      const candidates = await memory.recallCandidates()
+      const recall = selectRecall(candidates, issue.workspace, this.deps.now())
+      return recall.indexed.length === 0 ? undefined : recall
+    } catch (error) {
+      this.deps.logger?.warn(
+        `vela: 召回读不成，这次不带经验：${error instanceof Error ? error.message : String(error)}`,
+      )
+      return undefined
+    }
   }
 
   /** 施加权限档位。返回错误说明，或 undefined 表示成功。 */
@@ -564,6 +618,7 @@ export class Runner {
       ...(entry.usage === undefined ? {} : { usage: entry.usage }),
       files: touchedFiles(entry),
       commands: [...entry.commands],
+      ...(entry.recall === undefined ? {} : { recall: entry.recall }),
     }
     const delivery: RecapDelivery | undefined = outcome === 'completed' && entry.lastText !== undefined
       ? extractDelivery(entry.lastText)
@@ -717,6 +772,8 @@ export interface PromptOptions {
    * 而派活文本必须与从前一字不差。
    */
   readonly closing?: boolean
+  /** 要前置的召回段落（已带标题）；缺省表示这次没有可召回的经验。 */
+  readonly recall?: string
 }
 
 /**
@@ -746,6 +803,9 @@ export function buildPrompt(
     const briefing = leaderInstruction(squad, platform ?? PLATFORM).trim()
     if (briefing.length > 0) sections.push(briefing)
   }
+  // 顺序：职责 → 以前的经验 → 收尾要求 → 任务。经验放任务前面，因为它是背景；
+  // 收尾要求紧贴任务，因为它是对这次交付的要求。
+  if (options?.recall !== undefined && options.recall.length > 0) sections.push(options.recall)
   if (options?.closing === true) sections.push(CLOSING_REQUIREMENT)
   // 一段都没有要加时原样交出任务：例外只在真的有东西要加时才成立。
   if (sections.length === 0) return task

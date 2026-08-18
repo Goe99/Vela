@@ -25,6 +25,7 @@ import {
   readRecap, recapRelativePath, workspaceSlug,
 } from './domain/okf-recap.ts'
 import type { BundleEntry, BundleGroup } from './domain/okf-bundle.ts'
+import type { RecallCandidate } from './domain/okf-recall.ts'
 import {
   appendLogEntry, buildRootIndex, buildWorkspaceIndex, logPath, loggedDeprecated, loggedLanded,
   loggedRemoved, loggedVerified, readLogLines, rootIndexPath, workspaceIndexPath,
@@ -80,8 +81,21 @@ export interface MemoryGateway {
   deprecate(relative: string, why: string, at: number): Promise<boolean>
 }
 
+/**
+ * 执行器用到的全部记忆能力：落盘、读召回候选、自增引用计数。
+ *
+ * 分成三个接口而不是一个大的：HTTP 层只需要验收那两个方法，执行器只需要
+ * 落盘与召回。接口窄一点，测试里的 fake 就窄一点。
+ */
+export interface MemoryPort extends MemoryWriter {
+  /** 记忆库里全部读得懂的复盘，供 `selectRecall` 筛选。 */
+  recallCandidates(): Promise<readonly RecallCandidate[]>
+  /** 一篇被展开过了，把引用计数加上。 */
+  countUse(relative: string, at: number): Promise<void>
+}
+
 /** 一个打开的记忆库。 */
-export class MemoryStore implements MemoryWriter, MemoryGateway {
+export class MemoryStore implements MemoryWriter, MemoryGateway, MemoryPort {
   /** 写链尾。每次写挂在前一次之后，保证三个文件的更新不交错。 */
   private tail: Promise<unknown> = Promise.resolve()
 
@@ -393,6 +407,32 @@ export class MemoryStore implements MemoryWriter, MemoryGateway {
   async history(): Promise<readonly string[]> {
     const text = await this.readFileAt(logPath())
     return text === undefined ? [] : readLogLines(text)
+  }
+
+  /**
+   * 召回候选：记忆库里全部**读得懂**的复盘。
+   *
+   * 筛选（同工作区、人审过、未废弃未陈旧）留给 `selectRecall`：那是纯逻辑，
+   * 可以脱离文件系统单测，而这里只负责把磁盘上的东西读成候选。
+   */
+  async recallCandidates(): Promise<readonly RecallCandidate[]> {
+    const stored = await this.list()
+    const found: RecallCandidate[] = []
+    for (const item of stored) {
+      const recap = item.recap
+      if (recap === undefined) continue
+      found.push({
+        path: item.path,
+        title: recap.title,
+        status: recap.status,
+        trust: recap.trust,
+        body: recap.body,
+        ...(recap.workspace === undefined ? {} : { workspace: recap.workspace }),
+        ...(recap.staleAfter === undefined ? {} : { staleAfter: recap.staleAfter }),
+        ...(recap.verifiedAt === undefined ? {} : { verifiedAt: recap.verifiedAt }),
+      })
+    }
+    return found
   }
 }
 
