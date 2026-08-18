@@ -1274,7 +1274,7 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   gap: 4px;
 }
 
-/* 成员 tab 的「加队员」区：模板下拉 + 空白按钮。下拉限宽，别撑满。 */
+/* 成员 tab 的「加队员」区：主按钮 + 展开后的模板卡片区。 */
 [data-vela-squad-add] {
   display: flex;
   gap: 6px;
@@ -1284,6 +1284,97 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 [data-vela-squad-add] select {
   width: auto;
   flex: 0 0 auto;
+}
+
+/* 队员卡网格：宽屏下用满整个宽度，而不是左侧一列到底。 */
+[data-vela-member-grid] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 9px;
+  align-items: start;
+}
+
+/* 网格里每张卡自己撑满格子，不再用 margin 推开。 */
+[data-vela-member-grid] [data-vela-member] {
+  margin-bottom: 0;
+}
+
+/* ── 「加队员」的模板卡片区 ──────────────────────────────
+ * 一排角色卡，点卡即用该模板加进来。每张卡讲清三件事：叫什么、
+ * 干什么、默认带哪些能力——让人在点之前就知道自己会得到什么。 */
+[data-vela-template-grid] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+[data-vela-template-card] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 9px 10px;
+  text-align: start;
+  border: 1px solid var(--vela-line-soft);
+  border-radius: 8px;
+  background: var(--vela-card);
+  color: var(--vela-text);
+  cursor: pointer;
+  font: inherit;
+  box-shadow: none;
+}
+
+[data-vela-template-card]:hover {
+  border-color: var(--vela-accent);
+  background: var(--vela-hover);
+}
+
+[data-vela-template-head] {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+[data-vela-template-name] {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* 默认队员名（队长眼里的工具名），小字跟在中文名后面。 */
+[data-vela-template-tool] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+  font-family: ui-monospace, monospace;
+}
+
+[data-vela-template-blurb] {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vela-text-2);
+}
+
+[data-vela-template-abilities] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+}
+
+/* 空白队员卡：虚线，视觉上明显是「另一个物种」。 */
+[data-vela-template-card][data-tone='blank'] {
+  border-style: dashed;
+  background: transparent;
+}
+
+[data-vela-template-plus] {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--vela-text-3);
+  border: 1px dashed var(--vela-line);
 }
 
 [data-vela-abilities] {
@@ -1471,7 +1562,7 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   flex-direction: column;
   min-height: 0;
   flex: 1 1 auto;
-  max-width: 760px;
+  /* 不限宽：面板是全幅的，详情内容要铺满——之前 760px 的限宽让宽屏右侧大片空白。 */
 }
 
 [data-vela-detail-head] {

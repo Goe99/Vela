@@ -11,7 +11,10 @@ import type { Board, TokenUsage } from '../domain/types.ts'
 import { BOARD_VERSION, emptyBoard } from '../domain/types.ts'
 import type { Squad } from '../domain/squad.ts'
 import type { MemberSpan } from '../domain/timeline.ts'
+import type { ModelOption } from '../domain/models.ts'
 import type { DocumentTarget } from '../domain/nav.ts'
+import type { InstalledSkill } from '../domain/skills.ts'
+import { SKILL_SOURCES } from '../domain/skills.ts'
 
 /** 最小 fetch 形状——只声明这里用到的部分。 */
 export type FetchLike = (input: string, init?: {
@@ -57,6 +60,8 @@ export interface BoardView {
    * 后端从时间轴记录器算出（ADR-0019），前端直接显示，不自己算。
    */
   readonly liveMembers?: Readonly<Record<string, readonly string[]>>
+  /** 这个部署接入的模型清单，供队员的模型下拉。空表 = 退化为手输。 */
+  readonly modelCatalog: readonly ModelOption[]
 }
 
 /**
@@ -64,6 +69,12 @@ export interface BoardView {
  * （后者含自动追加的队员名册，编辑器里只读展示）。
  */
 export type SquadShape = Squad & { readonly resolvedInstruction?: string }
+
+/** 技能广场的视图：这个部署装了的全部技能。available=false 表示部署没开技能页。 */
+export interface SkillsView {
+  readonly available: boolean
+  readonly skills: readonly InstalledSkill[]
+}
 
 /** 一次写操作的结果。 */
 export type MutationResult =
@@ -109,6 +120,46 @@ function readLiveMembers(value: unknown): Readonly<Record<string, readonly strin
   return out
 }
 
+/** 模型清单的读取：只留形状完整的选项，其余的丢掉。 */
+function readModelCatalog(value: unknown): readonly ModelOption[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is ModelOption =>
+    typeof item === 'object' && item !== null
+    && typeof (item as ModelOption).value === 'string'
+    && typeof (item as ModelOption).label === 'string')
+}
+
+/**
+ * 从未经校验的响应体里读出技能清单。逐条校验而不是整体强转：一条脏数据
+ * 不该让整个广场空白（与 readSquads 的透传不同——这里的条目要直接渲染，
+ * 形状不齐的丢掉）。
+ */
+function readSkills(body: unknown): SkillsView | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const raw = body as Record<string, unknown>
+  if (!Array.isArray(raw.skills)) return undefined
+  const skills: InstalledSkill[] = []
+  for (const candidate of raw.skills) {
+    if (typeof candidate !== 'object' || candidate === null) continue
+    const item = candidate as Record<string, unknown>
+    if (typeof item.name !== 'string' || typeof item.sourcePath !== 'string') continue
+    const source = (SKILL_SOURCES as readonly string[]).includes(item.source as string)
+      ? (item.source as InstalledSkill['source'])
+      : 'dsh'
+    skills.push({
+      name: item.name,
+      description: typeof item.description === 'string' ? item.description : '',
+      ...(typeof item.whenToUse === 'string' ? { whenToUse: item.whenToUse } : {}),
+      userOnly: item.userOnly === true,
+      source,
+      sourcePath: item.sourcePath,
+      effective: item.effective !== false,
+      ...(typeof item.problem === 'string' ? { problem: item.problem } : {}),
+    })
+  }
+  return { available: raw.available !== false, skills }
+}
+
 /** 从一个未经校验的响应体里读出视图；形状不对则 undefined。 */
 function readView(body: unknown): BoardView | undefined {
   if (typeof body !== 'object' || body === null) return undefined
@@ -130,6 +181,7 @@ function readView(body: unknown): BoardView | undefined {
     // 所以这条接缝必须由 board-client 自己的测试钉住。
     timelines: readTimelines(raw.timelines),
     liveMembers: readLiveMembers(raw.liveMembers),
+    modelCatalog: readModelCatalog(raw.modelCatalog),
   }
 }
 
@@ -141,6 +193,7 @@ const EMPTY: BoardView = {
   squads: [],
   canManageSquads: false,
   platform: 'linux',
+  modelCatalog: [],
 }
 
 /** Board 的浏览器侧客户端。 */
@@ -256,6 +309,26 @@ export class BoardClient {
       }
     } catch {
       return { opened: false }
+    }
+  }
+
+  /**
+   * 技能广场：这个部署装了的全部技能（只读）。
+   *
+   * 不走 refresh/write 链：它与 Board 快照无关，失败了也不该动看板那份
+   * 「最后一次成功视图」。返回 undefined = 拉取失败，界面显示「拉取失败」
+   * 而不是「一个技能也没装」——这两件事混了会让人去重装并不存在的问题。
+   */
+  async listSkills(): Promise<SkillsView | undefined> {
+    try {
+      const response = await this.fetch(`${API_PREFIX}/skills`, {
+        method: 'GET',
+        headers: { 'cache-control': 'no-store' },
+      })
+      if (!response.ok) return undefined
+      return readSkills(await response.json())
+    } catch {
+      return undefined
     }
   }
 

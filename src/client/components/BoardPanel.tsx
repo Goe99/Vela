@@ -212,6 +212,7 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
           canManage: view?.canManageSquads ?? false,
           sandboxPresets: view?.sandboxPresets ?? [],
           platform: view?.platform ?? 'linux',
+          modelCatalog: view?.modelCatalog ?? [],
           client,
           onChanged: refresh,
         })

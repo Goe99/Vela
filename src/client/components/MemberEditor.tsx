@@ -8,6 +8,7 @@
 import { createElement } from 'react'
 import type { Ability, MemberBackend, SquadMember } from '../../domain/squad.ts'
 import { ABILITIES, ABILITY_LABELS, memberTools } from '../../domain/squad.ts'
+import type { ModelOption } from '../../domain/models.ts'
 
 /** MemberEditor 的 props。 */
 export interface MemberEditorProps {
@@ -16,6 +17,8 @@ export interface MemberEditorProps {
   readonly index: number
   /** 部署平台，用于把「跑命令」展开成真实工具名。 */
   readonly platform: string
+  /** 这个部署接入的模型清单；空表 = 模型字段退化为手输。 */
+  readonly modelCatalog: readonly ModelOption[]
   /** 改这个队员的某些字段。 */
   readonly onPatch: (change: Partial<SquadMember>) => void
   readonly onRemove: () => void
@@ -94,21 +97,41 @@ export function MemberEditor(props: MemberEditorProps): ReturnType<typeof create
       'aria-label': '职责说明',
       onChange: (event: { target: { value: string } }) => onPatch({ instruction: event.target.value }),
     }),
-    // 模型路由（可空）。放职责与能力之间：它是「这个人是谁」的一部分，不是工具的事。
-    createElement('input', {
-      'data-vela-member-model': '',
-      value: member.model ?? '',
-      placeholder: '模型（留空沿用队长）；也可写 provider/model',
-      'aria-label': `队员 ${member.name} 的模型`,
-      title: '这个队员用什么模型。留空 = 沿用队长的路由。参考 dsh-agent-teams 的按队员配模型。',
-      onChange: (event: { target: { value: string } }) => {
-        const value = event.target.value
-        // 清空用空串而不是 `undefined`：`exactOptionalPropertyTypes` 下后者进不了
-        // `Partial<SquadMember>`，而领域层对两者的处置完全一致——`memberAgentOptions`、
-        // 校验与读回三处都先 trim 再判空，空串就是「没填」。
-        onPatch({ model: value.trim().length === 0 ? '' : value })
-      },
-    }),
+    // 模型路由。有清单时是下拉（让人挑，不让人背模型名）；清单空——比如
+    // 部署没接 llm 服务或清单拉取全失败——退化为手输，功能不因此消失。
+    props.modelCatalog.length > 0
+      ? createElement(
+        'select',
+        {
+          'data-vela-member-model': '',
+          value: member.model ?? '',
+          'aria-label': `队员 ${member.name} 的模型`,
+          title: '这个队员用什么模型。「沿用队长」= 跟队长同一个路由。',
+          onChange: (event: { target: { value: string } }) => onPatch({ model: event.target.value }),
+        },
+        createElement('option', { value: '' }, '沿用队长（默认）'),
+        // 已保存的值不在清单里（比如那个模型后来下线了）时也要显示出来，
+        // 否则下拉会静默把它显示成别的值——那是丢配置。
+        ...(member.model !== undefined && member.model !== '' && !props.modelCatalog.some(o => o.value === member.model)
+          ? [createElement('option', { key: '__stale', value: member.model }, `${member.model}（已不在清单里）`)]
+          : []),
+        ...props.modelCatalog.map(option =>
+          createElement('option', { key: option.value, value: option.value }, option.label)),
+      )
+      : createElement('input', {
+        'data-vela-member-model': '',
+        value: member.model ?? '',
+        placeholder: '模型（留空沿用队长）；也可写 provider/model',
+        'aria-label': `队员 ${member.name} 的模型`,
+        title: '这个队员用什么模型。留空 = 沿用队长的路由。参考 dsh-agent-teams 的按队员配模型。',
+        onChange: (event: { target: { value: string } }) => {
+          const value = event.target.value
+          // 清空用空串而不是 `undefined`：`exactOptionalPropertyTypes` 下后者进不了
+          // `Partial<SquadMember>`，而领域层对两者的处置完全一致——`memberAgentOptions`、
+          // 校验与读回三处都先 trim 再判空，空串就是「没填」。
+          onPatch({ model: value.trim().length === 0 ? '' : value })
+        },
+      }),
     // 第三行：能力是可点的 chip
     createElement(
       'div',

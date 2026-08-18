@@ -6,6 +6,8 @@
  * client half 经 package.json 的 dsh.client 声明被发现，不在这里引用。
  */
 
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { handleApi, API_PREFIX } from './http/routes.ts'
 import type { ApiDeps, ApiRequest, ApiResponse } from './http/routes.ts'
 import { BoardStore } from './domain/store.ts'
@@ -17,9 +19,11 @@ import { VELA_PROVIDER_PREFIX, installSlottedProviders } from './squad-provider.
 import type { SubagentsServiceLike } from './squad-provider.ts'
 import { Runner, observeSessions } from './runner.ts'
 import { MemoryStore } from './memory.ts'
+import { ModelCatalog } from './model-catalog.ts'
+import { SkillCatalog } from './skills.ts'
 import type { ExecDefaults } from './domain/exec.ts'
 import type { DocumentTarget } from './domain/nav.ts'
-import type { HttpRequest, HttpResponse, VelaContext } from './dsh.ts'
+import type { HttpRequest, HttpResponse, LlmServiceLike, VelaContext } from './dsh.ts'
 
 /** Cordis 插件名。 */
 export const name = 'vela'
@@ -66,6 +70,13 @@ export interface Config {
    * apiProxy 缺失时隐去派活按钮同一套做法。
    */
   squadRoot?: string
+  /**
+   * 技能广场扫的 DSH 技能根。默认 `<dshHome>/skills`——由 cordis.patch.yml
+   * 用 `dshHomePath` 注入，而不是在这里猜 `~/.dsh`：部署把 dshHome 挪到别处
+   * 时注入值仍然是对的。缺省时的回落（DSH_HOME 环境变量、再退 `~/.dsh`）
+   * 与 DSH 自己的解析规则一致。
+   */
+  skillsDshRoot?: string
   /**
    * 小队组合所基于的基准 preset（ADR-0016）。
    *
@@ -202,6 +213,18 @@ export function apply(ctx: VelaContext, config: Config): void {
     // 下来只会让人以为它是完整的。
     const timeline = new TimelineRecorder()
 
+    // 模型清单：队员的「模型」字段是下拉而不是手输，清单来自宿主的 llm 服务。
+    // listModels 是异步的而看板视图是同步拼的，所以清单在后台定时刷进缓存，
+    // 接口永远只读缓存（见 ModelCatalog）。宿主没有这个服务就不装，前端退化为手输。
+    const llm = ctx.get('llm')
+    let modelCatalog: ModelCatalog | undefined
+    if (llm !== undefined) {
+      modelCatalog = new ModelCatalog(llm, message => ctx.logger?.warn(message))
+      void modelCatalog.refresh()
+      const timer = setInterval(() => { void modelCatalog?.refresh() }, 5 * 60_000)
+      timers.add(timer)
+    }
+
     // 记忆库：没配路径就根本不建这个对象，于是整条落盘路径一行也不跑（ADR-0022）。
     // 路径不合法时只记一句并关掉记忆功能，而不是让整个插件起不来——看看看板、
     // 建卡、派活在没有记忆时仍然完全成立。
@@ -229,6 +252,21 @@ export function apply(ctx: VelaContext, config: Config): void {
       maxHoldMs: config.slotMaxHoldMs ?? DEFAULT_SLOT_MAX_HOLD_MS,
       ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
     })
+
+    // 技能广场：扫 DSH 的技能目录。根的位置与 DSH 自己的解析规则对齐
+    // （dsh-skill-filesystem 的 resolveDshHome / DSH_AGENTS_HOME / DSH_BUNDLED_SKILL_DIR），
+    // 优先级从高到低排——靠前的来源盖住同名技能（DSH 的 rank 规则：dsh < agents < bundled，
+    // 数值小者胜）。
+    const home = homedir()
+    const dshHome = process.env.DSH_HOME ?? join(home, '.dsh')
+    const agentsHome = process.env.DSH_AGENTS_HOME ?? join(home, '.agents')
+    const skillsCatalog = new SkillCatalog([
+      { path: config.skillsDshRoot ?? join(dshHome, 'skills'), source: 'dsh' },
+      { path: join(agentsHome, 'skills'), source: 'agents' },
+      ...(process.env.DSH_BUNDLED_SKILL_DIR === undefined
+        ? []
+        : [{ path: process.env.DSH_BUNDLED_SKILL_DIR, source: 'bundled' as const }]),
+    ])
 
     const ready = BoardStore.open(config.boardPath).then(async (store) => {
       if (disposed) return undefined
@@ -351,6 +389,8 @@ export function apply(ctx: VelaContext, config: Config): void {
           ...(ctx.get('apiProxy') === undefined ? {} : { dispatcher: context.runner }),
           ...(context.squads === undefined ? {} : { squads: context.squads }),
           timeline,
+          skills: skillsCatalog,
+          ...(modelCatalog === undefined ? {} : { modelCatalog: () => modelCatalog.options }),
           ...(ctx.get('apiProxy') === undefined ? {} : { documents: openDocuments(ctx) }),
           ...(memory === undefined ? {} : { memory }),
           ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),

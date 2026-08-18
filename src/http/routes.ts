@@ -19,6 +19,8 @@ import type { Squad, SquadMember } from '../domain/squad.ts'
 import type { DocumentTarget } from '../domain/nav.ts'
 import { DOCUMENT_TARGETS } from '../domain/nav.ts'
 import type { MemberSpan } from '../domain/timeline.ts'
+import type { ModelOption } from '../domain/models.ts'
+import type { InstalledSkill } from '../domain/skills.ts'
 import type { SquadErrorCode, SquadResult } from '../domain/squad-store.ts'
 import type { MemoryGateway } from '../memory.ts'
 import { recapRelativePath } from '../domain/okf-recap.ts'
@@ -66,12 +68,19 @@ export interface ApiDeps {
    * 展开后的真实工具名（`pwsh` 还是 `bash`），所以这个事实必须由宿主告知。
    */
   readonly platform: () => string
+  /**
+   * 这个部署接入的模型清单，供队员的模型下拉。缺省或空表 = 前端退化为手输。
+   * 同步读：清单由装配层在后台刷进缓存（见 ModelCatalog）。
+   */
+  readonly modelCatalog?: () => readonly ModelOption[]
   /** 缺失表示这个部署不能派活（例如未挂载 apiProxy）。 */
   readonly dispatcher?: DispatchPort
   /** 小队的读写。缺失表示这个部署没有可写的 preset 根，小队入口不现身。 */
   readonly squads?: SquadPort
   /** 小队并行时间轴的读取。缺失表示这个部署不记时间轴（ADR-0019）。 */
   readonly timeline?: TimelinePort
+  /** 技能广场的只读列表。缺失表示这个部署没开技能页。 */
+  readonly skills?: SkillsPort
   /** 把配置文件交给系统打开。缺失时对应的导航项退化为只显示路径。 */
   readonly documents?: DocumentPort
   /**
@@ -115,6 +124,14 @@ export interface SquadPort {
  */
 export interface DocumentPort {
   open(target: DocumentTarget): Promise<{ readonly opened: boolean; readonly path?: string }>
+}
+
+/**
+ * 已安装技能的只读列表（技能广场）。HTTP 层只靠这个窄接口认识
+ * {@link SkillCatalog}，因此接缝测试能用一个内存 fake 驱动。
+ */
+export interface SkillsPort {
+  list(): Promise<readonly InstalledSkill[]>
 }
 
 /**
@@ -237,6 +254,8 @@ function boardView(board: Board, deps: ApiDeps, squads: readonly Squad[]): unkno
     canManageSquads: deps.squads !== undefined,
     /** 部署平台，小队编辑器靠它展开工具白名单。 */
     platform: deps.platform(),
+    /** 这个部署接入的模型清单——队员的模型下拉用。 */
+    modelCatalog: deps.modelCatalog?.() ?? [],
     /**
      * 小队时间轴，按**会话 id** 索引（ADR-0019）。
      *
@@ -413,6 +432,15 @@ export async function handleApi(
     const outcome = await deps.documents.open(target as DocumentTarget)
     // opened=false 不是错误：宿主打不开时把路径告知 Operator，比一句报错有用。
     return json(200, { ok: true, ...outcome })
+  }
+
+  // GET /skills —— 技能广场：这个部署装了的全部技能（只读）。每次请求现扫，
+  // 不缓存：目录随时可能被 Operator 手改，多一次 readdir 比一份过期清单便宜。
+  if (method === 'GET' && segments.length === 1 && segments[0] === 'skills') {
+    if (deps.skills === undefined) {
+      return json(200, { ok: true, available: false, skills: [] })
+    }
+    return json(200, { ok: true, available: true, skills: await deps.skills.list() })
   }
 
   // ---- 小队（ADR-0016）----

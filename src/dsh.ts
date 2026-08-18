@@ -172,6 +172,12 @@ export interface PermissionPresetsLike {
   set(session: SessionHandle, name: string): void
 }
 
+/** 宿主 llm 服务中 Vela 用到的最小面：列出这个部署接入的模型。 */
+export interface LlmServiceLike {
+  listProviders(): readonly { readonly id: string; readonly name: string }[]
+  listModels(provider: string): Promise<readonly { readonly id: string; readonly name: string }[]>
+}
+
 /**
  * 一条会话事件。Vela 关心三类：assistant/message 带 token 用量**与回复正文**，
  * tool/call 带工具名与参数，turn/end 宣布一次执行结束。其余原样忽略。
@@ -239,6 +245,7 @@ export interface VelaContext {
   get(name: 'sessions'): SessionStoreLike | undefined
   get(name: 'agentPresets'): AgentPresetsServiceLike | undefined
   get(name: 'subagents'): SubagentsHandle | undefined
+  get(name: 'llm'): LlmServiceLike | undefined
   readonly webServer?: WebServerLike
   readonly logger?: {
     warn(message: unknown): void

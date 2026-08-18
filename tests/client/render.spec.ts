@@ -312,6 +312,7 @@ describe('SquadsPage', () => {
     canManage: true,
     sandboxPresets: ['workspace-write'],
     platform: 'linux',
+    modelCatalog: [],
     client: injected().client,
     onChanged: () => undefined,
     ...overrides,

@@ -94,11 +94,17 @@ describe('BoardClient.refresh', () => {
     const client = new BoardClient(fakeFetch([{
       ok: true,
       status: 200,
-      body: { ...boardBody(), timelines: { s1: [span] }, liveMembers: { 'issue-1': ['worker_a'] } },
+      body: {
+        ...boardBody(),
+        timelines: { s1: [span] },
+        liveMembers: { 'issue-1': ['worker_a'] },
+        modelCatalog: [{ value: 'deepseek/deepseek-chat', label: 'DeepSeek Chat（DeepSeek）', provider: 'deepseek', model: 'deepseek-chat' }],
+      },
     }]))
     const view = await client.refresh()
     assert.deepEqual(view?.timelines?.s1, [span])
     assert.deepEqual(view?.liveMembers?.['issue-1'], ['worker_a'])
+    assert.equal(view?.modelCatalog[0]?.value, 'deepseek/deepseek-chat', '模型清单也要透传——队员的下拉靠它')
   })
 
   it('请求失败时保留上次成功快照，不清空', async () => {

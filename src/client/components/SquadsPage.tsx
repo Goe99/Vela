@@ -11,6 +11,7 @@
 
 import { createElement, useState } from 'react'
 import type { BoardClient, SquadShape } from '../board-client.ts'
+import type { ModelOption } from '../../domain/models.ts'
 import { DEFAULT_MAX_PARALLEL_MEMBERS } from '../../domain/squad.ts'
 import { CreateSquadDialog } from './CreateSquadDialog.tsx'
 import { avatarChar, memberHue } from './MemberEditor.tsx'
@@ -24,6 +25,8 @@ export interface SquadsPageProps {
   readonly sandboxPresets: readonly string[]
   /** 部署平台，用于把「跑命令」展开成 `pwsh` 或 `bash`。 */
   readonly platform: string
+  /** 这个部署接入的模型清单，供队员的模型下拉；空表 = 退化为手输。 */
+  readonly modelCatalog: readonly ModelOption[]
   readonly client: BoardClient
   onChanged(): void | Promise<void>
 }
@@ -81,6 +84,7 @@ export function SquadsPage(props: SquadsPageProps): ReturnType<typeof createElem
         key: squad.id,
         squad,
         platform: props.platform,
+        modelCatalog: props.modelCatalog,
         sandboxPresets: props.sandboxPresets,
         busy,
         onBack: () => setView({ kind: 'list' }),
