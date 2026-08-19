@@ -1299,14 +1299,15 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   margin-bottom: 0;
 }
 
-/* ── 「加队员」的模板卡片区 ──────────────────────────────
+/* ── 「加队员」弹窗的模板卡片网格 ─────────────────────────
+ * 住在 AddMemberDialog 的弹窗体里（曾是详情页的内联展开区）。
  * 一排角色卡，点卡即用该模板加进来。每张卡讲清三件事：叫什么、
- * 干什么、默认带哪些能力——让人在点之前就知道自己会得到什么。 */
+ * 干什么、默认带哪些能力——让人在点之前就知道自己会得到什么。
+ * 弹窗宽度固定，网格固定两列（对齐 Waker 参照的形态），不随宽度变三列。 */
 [data-vela-template-grid] {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 8px;
-  margin-bottom: 10px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
 }
 
 [data-vela-template-card] {

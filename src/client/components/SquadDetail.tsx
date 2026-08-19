@@ -16,9 +16,9 @@ import { createElement, useState } from 'react'
 import type { SquadShape } from '../board-client.ts'
 import type { SquadMember } from '../../domain/squad.ts'
 import type { ModelOption } from '../../domain/models.ts'
-import { DEFAULT_MAX_PARALLEL_MEMBERS, leaderInstruction, ABILITY_LABELS } from '../../domain/squad.ts'
-import { ROLE_TEMPLATES, instantiateTemplate } from '../../domain/role-templates.ts'
-import { MemberEditor, avatarChar, memberHue } from './MemberEditor.tsx'
+import { DEFAULT_MAX_PARALLEL_MEMBERS, leaderInstruction } from '../../domain/squad.ts'
+import { AddMemberDialog } from './AddMemberDialog.tsx'
+import { MemberEditor } from './MemberEditor.tsx'
 
 /** 「沿用全局默认」这个档位选项的哨兵值。\u0000 前缀让它不会撞任何真实档位名。 */
 const INHERIT = '\u0000inherit'
@@ -39,15 +39,6 @@ function draftOf(squad: SquadShape): Draft {
     members: squad.members.map(member => ({ ...member })),
     sandbox: squad.sandbox ?? INHERIT,
     maxParallelMembers: squad.maxParallelMembers,
-  }
-}
-
-function newMember(index: number): SquadMember {
-  return {
-    name: `member_${index + 1}`,
-    instruction: '',
-    abilities: ['read'],
-    backend: 'spawn',
   }
 }
 
@@ -73,17 +64,17 @@ export function SquadDetail(props: SquadDetailProps): ReturnType<typeof createEl
   const { squad, platform, busy } = props
   const [draft, setDraft] = useState<Draft>(() => draftOf(squad))
   const [tab, setTab] = useState<Tab>('members')
-  /** 「+ 加队员」的模板卡片区是否展开。 */
-  const [pickerOpen, setPickerOpen] = useState(false)
+  /** 「+ 加队员」的弹窗是否打开。 */
+  const [dialogOpen, setDialogOpen] = useState(false)
 
   const patch = (change: Partial<Draft>): void => {
     setDraft(current => ({ ...current, ...change }))
   }
 
-  /** 加一个队员（模板或空白），然后收起模板区——任务完成了就别再占着地方。 */
+  /** 弹窗里点中一张卡：队员进草稿，然后关窗——任务完成了就别再占着地方。 */
   const addMember = (member: SquadMember): void => {
     patch({ members: [...draft.members, member] })
-    setPickerOpen(false)
+    setDialogOpen(false)
   }
 
   const patchMember = (index: number, change: Partial<SquadMember>): void => {
@@ -170,57 +161,11 @@ export function SquadDetail(props: SquadDetailProps): ReturnType<typeof createEl
           createElement('div', { 'data-vela-squad-add': '' },
             createElement('button', {
               type: 'button',
-              'data-tone': pickerOpen ? undefined : 'primary',
-              'aria-expanded': pickerOpen,
-              onClick: () => setPickerOpen(open => !open),
-            }, pickerOpen ? '收起' : '+ 加队员'),
+              'data-tone': 'primary',
+              onClick: () => setDialogOpen(true),
+            }, '+ 加队员'),
           ),
         ),
-        // 模板卡片区：展开时每个角色一张卡——徽标、名字、一句话说它干什么、
-        // 默认带哪些能力。点卡即用该模板加进来；最后一张是空白队员。
-        // 比起一个写着「从模板加…」的下拉，这才能让人看懂自己在挑什么。
-        ...(pickerOpen
-          ? [createElement(
-            'div',
-            { key: 'picker', 'data-vela-template-grid': '' },
-            ...ROLE_TEMPLATES.map(template => createElement(
-              'button',
-              {
-                key: template.id,
-                type: 'button',
-                'data-vela-template-card': '',
-                onClick: () => addMember(instantiateTemplate(template, draft.members.map(m => m.name))),
-              },
-              createElement('span', { 'data-vela-template-head': '' },
-                createElement('span', {
-                  'data-vela-avatar': '',
-                  'data-hue': String(memberHue(template.name)),
-                  'aria-hidden': 'true',
-                }, avatarChar(template.name)),
-                createElement('span', { 'data-vela-template-name': '' }, template.label),
-                createElement('span', { 'data-vela-template-tool': '' }, template.name),
-              ),
-              createElement('span', { 'data-vela-template-blurb': '' }, template.blurb),
-              createElement('span', { 'data-vela-template-abilities': '' },
-                template.abilities.map(a => ABILITY_LABELS[a]).join(' · ')),
-            )),
-            createElement(
-              'button',
-              {
-                key: '__blank',
-                type: 'button',
-                'data-vela-template-card': '',
-                'data-tone': 'blank',
-                onClick: () => addMember(newMember(draft.members.length)),
-              },
-              createElement('span', { 'data-vela-template-head': '' },
-                createElement('span', { 'data-vela-template-plus': '', 'aria-hidden': 'true' }, '+'),
-                createElement('span', { 'data-vela-template-name': '' }, '空白队员'),
-              ),
-              createElement('span', { 'data-vela-template-blurb': '' }, '从零写：名字、职责、能力都自己定'),
-            ),
-          )]
-          : []),
         // 队长卡：永远在成员列表最前面。它不是 members 数组里的一条——队长就是
         // 基准 preset 扮演的角色，它的配置就是那段职责说明（draft.instruction）。
         // 但界面把它摆出来：小队里"有谁"这件事，队长不该隐身。
@@ -345,5 +290,13 @@ export function SquadDetail(props: SquadDetailProps): ReturnType<typeof createEl
       }, busy ? '保存中…' : '保存'),
       createElement('button', { type: 'button', disabled: busy, onClick: props.onBack }, '放弃改动'),
     ),
+    // 加队员弹窗：点卡即加，Esc/遮罩/X/取消只关窗不加人。
+    ...(dialogOpen ? [createElement(AddMemberDialog, {
+      key: 'add-member',
+      existingNames: draft.members.map(m => m.name),
+      memberCount: draft.members.length,
+      onPick: addMember,
+      onClose: () => setDialogOpen(false),
+    })] : []),
   )
 }
