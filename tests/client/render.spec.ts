@@ -21,7 +21,7 @@ import { BoardGrid } from '../../src/client/components/BoardGrid.tsx'
 import type { BoardGridProps } from '../../src/client/components/BoardGrid.tsx'
 import { EditIssueForm } from '../../src/client/components/EditIssueForm.tsx'
 import { PanelSidebar } from '../../src/client/components/PanelSidebar.tsx'
-import { SkillsPage } from '../../src/client/components/SkillsPage.tsx'
+import { SkillsPage, SkillDetailDialog } from '../../src/client/components/SkillsPage.tsx'
 import { SquadsPage } from '../../src/client/components/SquadsPage.tsx'
 import { NAV_ITEMS } from '../../src/domain/nav.ts'
 import type { Squad } from '../../src/domain/squad.ts'
@@ -391,6 +391,68 @@ describe('SkillsPage', () => {
   it('读不懂的技能把原因摆出来，不是悄悄不列', () => {
     const html = renderToStaticMarkup(createElement(SkillsPage, pageProps({
       view: { available: true, skills: [{ ...skill, problem: '头部里没有 name' }] },
+    })))
+    assert.ok(html.includes('头部里没有 name'))
+  })
+
+  it('三个来源各占一列，空列也在——结构不随内容塌掉', () => {
+    const html = renderToStaticMarkup(createElement(SkillsPage, pageProps({
+      view: { available: true, skills: [skill] },
+    })))
+    for (const source of ['dsh', 'agents', 'bundled']) {
+      assert.ok(html.includes(`data-vela-skill-col="${source}"`), `缺了 ${source} 列`)
+    }
+    assert.ok(html.includes('这个目录还没有技能'), '空列要有说明')
+  })
+
+  it('卡片只摆基础内容：路径收进弹窗，不在卡上', () => {
+    const html = renderToStaticMarkup(createElement(SkillsPage, pageProps({
+      view: { available: true, skills: [skill] },
+    })))
+    assert.ok(html.includes('/asu'))
+    assert.ok(!html.includes(skill.sourcePath), '卡上不该有完整路径')
+  })
+})
+
+describe('SkillDetailDialog', () => {
+  const skill = {
+    name: 'asu',
+    description: '简历酥化',
+    whenToUse: '用户要求包装经历时',
+    userOnly: false,
+    source: 'agents' as const,
+    sourcePath: '/home/x/.agents/skills/asu/SKILL.md',
+    effective: true,
+  }
+
+  const dialogProps = (overrides: Record<string, unknown> = {}) => ({
+    skill,
+    onClose: () => undefined,
+    ...overrides,
+  })
+
+  it('摆出全部详情：描述、何时用、来源、路径', () => {
+    const html = renderToStaticMarkup(createElement(SkillDetailDialog, dialogProps()))
+    assert.ok(html.includes('简历酥化'))
+    assert.ok(html.includes('用户要求包装经历时'))
+    assert.ok(html.includes('共享目录'))
+    assert.ok(html.includes(skill.sourcePath), '弹窗里要有完整路径')
+    assert.ok(html.includes('生效中'))
+  })
+
+  it('被盖住的技能说明实际生效的是哪份', () => {
+    const winner = { ...skill, source: 'dsh' as const, sourcePath: '/home/x/.dsh/skills/asu/SKILL.md' }
+    const html = renderToStaticMarkup(createElement(SkillDetailDialog, dialogProps({
+      skill: { ...skill, effective: false },
+      overriddenBy: winner,
+    })))
+    assert.ok(html.includes('被同名盖住'))
+    assert.ok(html.includes('DSH 目录里的那份'), '要指出生效的是谁')
+  })
+
+  it('读不懂的技能把警告摆在最上面', () => {
+    const html = renderToStaticMarkup(createElement(SkillDetailDialog, dialogProps({
+      skill: { ...skill, problem: '头部里没有 name' },
     })))
     assert.ok(html.includes('头部里没有 name'))
   })

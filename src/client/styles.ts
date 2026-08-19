@@ -1772,13 +1772,17 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   cursor: not-allowed;
 }
 
-/* ── 技能广场 ────────────────────────────────────────────── */
+/* ── 技能广场：三个来源各占一列，与看板泳道同款 ──────────── */
 
 [data-vela-skills] {
   flex: 1 1 auto;
   min-width: 0;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding: 14px 18px;
+  /* 列自己滚动，页面不滚——列头始终在视野里。 */
+  overflow: hidden;
 }
 
 [data-vela-skills] h2 {
@@ -1786,45 +1790,90 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   font-size: 15px;
 }
 
-[data-vela-skills] h3 {
-  margin: 0;
-  font-size: 12px;
-  color: var(--vela-text-2);
-}
-
 [data-vela-skill-head] {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
+  flex: 0 0 auto;
 }
 
 [data-vela-skill-head] h2 { flex: 1 1 auto; }
 
-[data-vela-skill-group] { margin-bottom: 14px; }
+[data-vela-skill-cols] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+}
+
+/* 一列 = 一个来源。外观对齐看板泳道：描边 + 淡底 + 圆角。 */
+[data-vela-skill-col] {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--vela-line);
+  border-radius: 8px;
+  background: var(--vela-lane);
+  overflow: hidden;
+}
+
+[data-vela-skill-col-head] {
+  flex: 0 0 auto;
+  padding: 9px 11px 7px;
+  border-bottom: 1px solid var(--vela-line-soft);
+}
+
+[data-vela-skill-col-head] h3 {
+  margin: 0;
+  font-size: 12px;
+  color: var(--vela-text-2);
+}
 
 [data-vela-skill-hint] {
   font-size: 11px;
   color: var(--vela-text-3);
-  margin: 3px 0 7px;
+  margin-top: 2px;
 }
 
+[data-vela-skill-col-body] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+/* 紧凑卡：字母徽 + 名字 + 一行描述，点开看详情。 */
 [data-vela-skill-row] {
-  padding: 9px 11px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 9px;
   margin-bottom: 7px;
   border: 1px solid var(--vela-line-soft);
   border-radius: 7px;
   background: var(--vela-card);
   box-shadow: var(--vela-card-shadow);
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+[data-vela-skill-row]:hover { border-color: var(--vela-line); }
+[data-vela-skill-row]:focus-visible {
+  outline: 2px solid var(--vela-accent);
+  outline-offset: 1px;
 }
 
 /* 被同名盖住的技能整行调淡：它还在磁盘上，但生效的不是它。 */
 [data-vela-skill-row][data-dim='true'] { opacity: .55; }
 
 [data-vela-skill-main] {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
 }
 
@@ -1840,21 +1889,35 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   font-size: 12.5px;
 }
 
-[data-vela-skill-desc] {
+/* 卡片上的描述只有一行：详情在弹窗里。 */
+[data-vela-skill-row] [data-vela-skill-desc] {
   font-size: 12px;
   color: var(--vela-text-2);
-}
-
-[data-vela-skill-desc][data-vela-muted] { color: var(--vela-text-3); }
-
-[data-vela-skill-when] {
-  font-size: 11px;
-  color: var(--vela-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 [data-vela-skill-problem] {
   font-size: 12px;
   color: var(--vela-warn);
+}
+
+/* 详情弹窗里的字段块。 */
+[data-vela-skill-dialog-title] {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 14px;
+}
+
+[data-vela-skill-field] { margin-bottom: 12px; }
+
+[data-vela-skill-field-label] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+  margin-bottom: 3px;
 }
 
 [data-vela-skill-path] {
@@ -1864,7 +1927,8 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
 }
 
 [data-vela-skill-footer] {
-  margin-top: 6px;
+  flex: 0 0 auto;
+  margin-top: 8px;
   font-size: 11px;
   color: var(--vela-text-3);
 }

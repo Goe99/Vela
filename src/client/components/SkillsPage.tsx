@@ -1,18 +1,19 @@
 /**
  * 技能广场页：这个部署装了的全部技能，只读展示。
  *
- * 纯展示组件——数据与拉取时机都由 BoardPanel 持有（它在导航切进来时拉取，
- * 并拿着「拉取失败」与「还没装」的区别）。这里只管把清单画出来。
+ * 布局向看板看齐：三个来源（DSH 目录 / 共享目录 / 出厂自带）各占一列，
+ * 列独立滚动。一个技能是一张**紧凑卡**——字母徽、名字、一行描述；详情
+ * （完整描述、何时用、文件位置、生效状态）收进点开的弹窗里，与「创建
+ * 小队」同一个弹窗形态。
  *
- * 布局与小队页同款：一个页头（标题 + 计数 + 刷新），下面按来源分组，每个
- * 技能一行卡片。按来源分组而不是平铺：同名技能被谁盖住这件事，只有摆回
- * 各自来源里才看得懂。
+ * 纯展示组件——数据与拉取时机都由 BoardPanel 持有，这里只管把清单画出来。
  */
 
-import { createElement } from 'react'
+import { createElement, useEffect, useState } from 'react'
 import type { SkillsView } from '../board-client.ts'
 import type { InstalledSkill, SkillSource } from '../../domain/skills.ts'
 import { SKILL_SOURCES, SKILL_SOURCE_LABELS } from '../../domain/skills.ts'
+import { avatarChar, memberHue } from './MemberEditor.tsx'
 
 /** 技能广场的 props。 */
 export interface SkillsPageProps {
@@ -27,42 +28,168 @@ export interface SkillsPageProps {
 
 /** 每个来源目录的一句说明（路径给人看，方便去目录里加技能）。 */
 const SOURCE_HINTS: Readonly<Record<SkillSource, string>> = {
-  dsh: 'DSH 目录下的技能（~/.dsh/skills）',
-  agents: '共享目录下的技能（~/.agents/skills）',
-  bundled: '随 DSH 出厂自带的技能',
+  dsh: '~/.dsh/skills',
+  agents: '~/.agents/skills',
+  bundled: '随 DSH 出厂自带',
 }
 
-/** 一个技能的一行。 */
-function skillRow(skill: InstalledSkill): ReturnType<typeof createElement> {
+/** 技能详情弹窗的 props。 */
+export interface SkillDetailDialogProps {
+  readonly skill: InstalledSkill
+  /** 盖住它的那份同名技能（仅当这份被盖住时存在），用于说明实际生效的是谁。 */
+  readonly overriddenBy?: InstalledSkill
+  readonly onClose: () => void
+}
+
+/** 徽章：仅手动调用 / 被同名盖住。卡片与弹窗共用。 */
+function skillChips(skill: InstalledSkill): ReturnType<typeof createElement>[] {
+  return [
+    ...(skill.userOnly
+      ? [createElement('span', { key: 'uo', 'data-vela-chip': '', title: '模型看不到它，只能在输入框里手动 / 调用' }, '仅手动调用')]
+      : []),
+    ...(!skill.effective
+      ? [createElement('span', { key: 'sh', 'data-vela-chip': '', 'data-tone': 'medium' }, '被同名盖住')]
+      : []),
+  ]
+}
+
+/** 技能详情弹窗：点开一张技能卡后的完整信息。 */
+export function SkillDetailDialog(props: SkillDetailDialogProps): ReturnType<typeof createElement> {
+  const { skill, onClose } = props
+
+  // Esc 关弹窗。捕获阶段拦截并阻止传播：BoardPanel 在 window 的冒泡阶段挂了
+  // 全局「Esc 关面板」，不拦下的话按一下会连面板一起关（与创建小队弹窗同款处理）。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // onClose 只调 setState，setter 是稳定的，所以空依赖安全。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   return createElement(
     'div',
-    { key: `${skill.source}:${skill.sourcePath}`, 'data-vela-skill-row': '', 'data-dim': String(!skill.effective) },
+    { 'data-vela-modal-backdrop': '', onClick: onClose },
+    createElement(
+      'div',
+      {
+        'data-vela-modal': '',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': `技能 ${skill.name}`,
+        // 点弹窗内部不穿透到遮罩。
+        onClick: (event: { stopPropagation(): void }) => event.stopPropagation(),
+      },
+      createElement(
+        'header',
+        { 'data-vela-modal-head': '' },
+        createElement('span', { 'data-vela-skill-dialog-title': '' },
+          createElement('code', null, `/${skill.name}`),
+          ...skillChips(skill)),
+        createElement('button', {
+          type: 'button',
+          'data-vela-icon-btn': '',
+          'aria-label': '关闭',
+          onClick: onClose,
+        }, '✕'),
+      ),
+      createElement(
+        'div',
+        { 'data-vela-modal-body': '' },
+        ...(skill.problem !== undefined
+          ? [createElement('div', { key: 'prob', 'data-vela-skill-problem': '' }, `⚠ ${skill.problem}`)]
+          : []),
+        createElement('div', { 'data-vela-skill-field': '' },
+          createElement('div', { 'data-vela-skill-field-label': '' }, '做什么的'),
+          createElement('div', null,
+            skill.description.length > 0 ? skill.description : '（没有描述）')),
+        ...(skill.whenToUse === undefined
+          ? []
+          : [createElement('div', { key: 'when', 'data-vela-skill-field': '' },
+            createElement('div', { 'data-vela-skill-field-label': '' }, '何时用'),
+            createElement('div', null, skill.whenToUse))]),
+        createElement('div', { 'data-vela-skill-field': '' },
+          createElement('div', { 'data-vela-skill-field-label': '' }, '来源'),
+          createElement('div', null, `${SKILL_SOURCE_LABELS[skill.source]}（${SOURCE_HINTS[skill.source]}）`)),
+        createElement('div', { 'data-vela-skill-field': '' },
+          createElement('div', { 'data-vela-skill-field-label': '' }, '文件位置'),
+          createElement('div', { 'data-vela-skill-path': '' }, skill.sourcePath)),
+        createElement('div', { 'data-vela-skill-field': '' },
+          createElement('div', { 'data-vela-skill-field-label': '' }, '状态'),
+          createElement('div', null,
+            skill.effective
+              ? '生效中：对话里输入 /' + skill.name + ' 就能用。'
+              : `被同名盖住：实际生效的是${props.overriddenBy === undefined
+                ? '优先级更高的目录里的那份'
+                : `${SKILL_SOURCE_LABELS[props.overriddenBy.source]}里的那份（${props.overriddenBy.sourcePath}）`}。`)),
+      ),
+    ),
+  )
+}
+
+/** 一个技能的紧凑卡：字母徽 + 名字 + 一行描述，点开看详情。 */
+function skillCard(skill: InstalledSkill, onOpen: (skill: InstalledSkill) => void): ReturnType<typeof createElement> {
+  return createElement(
+    'div',
+    {
+      key: `${skill.source}:${skill.sourcePath}`,
+      'data-vela-skill-row': '',
+      'data-dim': String(!skill.effective),
+      role: 'button',
+      tabIndex: 0,
+      'aria-label': `技能 ${skill.name}，点开看详情`,
+      onClick: () => onOpen(skill),
+      onKeyDown: (event: { key: string }) => {
+        if (event.key === 'Enter' || event.key === ' ') onOpen(skill)
+      },
+    },
+    createElement('span', {
+      'data-vela-avatar': '',
+      'data-hue': String(memberHue(skill.name)),
+      'aria-hidden': 'true',
+    }, avatarChar(skill.name)),
     createElement('div', { 'data-vela-skill-main': '' },
       createElement('div', { 'data-vela-skill-title': '' },
         createElement('code', null, `/${skill.name}`),
-        // 「仅限手动」与「被盖住」是这个技能能不能被用起来的关键事实，
-        // 放在名字旁边而不是收进详情。
-        ...(skill.userOnly
-          ? [createElement('span', { key: 'uo', 'data-vela-chip': '', title: '模型看不到它，只能在输入框里手动 / 调用' }, '仅手动调用')]
-          : []),
-        ...(!skill.effective
-          ? [createElement('span', { key: 'sh', 'data-vela-chip': '', 'data-tone': 'medium', title: '更高优先级的目录里有同名技能，实际生效的是那份' }, '被同名盖住')]
-          : [])),
-      ...(skill.problem !== undefined
-        ? [createElement('div', { key: 'prob', 'data-vela-skill-problem': '' }, `⚠ ${skill.problem}`)]
-        : skill.description.length > 0
-          ? [createElement('div', { key: 'desc', 'data-vela-skill-desc': '' }, skill.description)]
-          : [createElement('div', { key: 'desc', 'data-vela-skill-desc': '', 'data-vela-muted': '' }, '（没有描述）')]),
-      ...(skill.whenToUse === undefined
-        ? []
-        : [createElement('div', { key: 'when', 'data-vela-skill-when': '' }, `何时用：${skill.whenToUse}`)]),
-      createElement('div', { 'data-vela-skill-path': '', title: skill.sourcePath }, skill.sourcePath)),
+        ...skillChips(skill)),
+      skill.problem !== undefined
+        ? createElement('div', { 'data-vela-skill-problem': '' }, `⚠ ${skill.problem}`)
+        : createElement('div', { 'data-vela-skill-desc': '' },
+          skill.description.length > 0 ? skill.description : '（没有描述）')),
+  )
+}
+
+/** 一个来源一列。 */
+function skillColumn(
+  source: SkillSource,
+  skills: readonly InstalledSkill[],
+  onOpen: (skill: InstalledSkill) => void,
+): ReturnType<typeof createElement> {
+  return createElement(
+    'section',
+    { key: source, 'data-vela-skill-col': source },
+    createElement('header', { 'data-vela-skill-col-head': '' },
+      createElement('h3', null, `${SKILL_SOURCE_LABELS[source]}（${skills.length}）`),
+      createElement('div', { 'data-vela-skill-hint': '' }, SOURCE_HINTS[source])),
+    createElement(
+      'div',
+      { 'data-vela-skill-col-body': '' },
+      ...(skills.length === 0
+        ? [createElement('div', { key: 'empty', 'data-vela-empty': '' }, '这个目录还没有技能')]
+        : skills.map(skill => skillCard(skill, onOpen))),
+    ),
   )
 }
 
 /** 技能广场页。 */
 export function SkillsPage(props: SkillsPageProps): ReturnType<typeof createElement> {
   const { view, failed, loading, onRefresh } = props
+  /** 当前打开详情的那个技能。 */
+  const [selected, setSelected] = useState<InstalledSkill | undefined>(undefined)
 
   const head = createElement(
     'div',
@@ -115,22 +242,30 @@ export function SkillsPage(props: SkillsPageProps): ReturnType<typeof createElem
     )
   }
 
+  // 详情弹窗里「被同名盖住」的说明需要知道生效的是哪份：同名且生效的那一个。
+  const winnerOf = selected === undefined
+    ? undefined
+    : view.skills.find(skill => skill.name === selected.name && skill.effective)
+
   return createElement(
     'div',
     { 'data-vela-skills': '' },
     head,
-    ...SKILL_SOURCES.map((source) => {
-      const group = view.skills.filter(skill => skill.source === source)
-      if (group.length === 0) return null
-      return createElement(
-        'section',
-        { key: source, 'data-vela-skill-group': source },
-        createElement('h3', null, `${SKILL_SOURCE_LABELS[source]}（${group.length}）`),
-        createElement('div', { 'data-vela-skill-hint': '' }, SOURCE_HINTS[source]),
-        ...group.map(skillRow),
-      )
-    }),
+    createElement(
+      'div',
+      { 'data-vela-skill-cols': '' },
+      ...SKILL_SOURCES.map(source =>
+        skillColumn(source, view.skills.filter(skill => skill.source === source), setSelected)),
+    ),
     createElement('div', { 'data-vela-skill-footer': '' },
       '列的是全局目录。工作区里 .dsh/skills 的项目级技能不在这里——它们只在那个工作区里生效，优先级也更高。'),
+    ...(selected === undefined
+      ? []
+      : [createElement(SkillDetailDialog, {
+        key: 'detail',
+        skill: selected,
+        ...(winnerOf === undefined || winnerOf === selected ? {} : { overriddenBy: winnerOf }),
+        onClose: () => setSelected(undefined),
+      })]),
   )
 }
