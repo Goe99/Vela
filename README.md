@@ -59,6 +59,7 @@ dsh plugin --profile <name> add <本仓库路径>
 | 项 | 含义 |
 |---|---|
 | `boardPath` | Board 快照的绝对路径，默认 `$DSH_HOME/vela/board.json`。**无 cwd 回落**（ADR-0006）。 |
+| `memoryPath` | 记忆库目录，默认 `$DSH_HOME/vela/memory`。**删掉这一项就整体关掉记忆功能**：不落复盘、不注入经验、派活文本与从前一字不差（ADR-0022）。 |
 | `exec.agentPreset` | 派活默认的 agent preset；省略则用 dsh 自己的有效默认。 |
 | `exec.sandbox` | 派活默认的**权限 preset 名字**（不是 sandbox 档位取值，见 ADR-0014）；省略则沿用会话创建时钉入的用户默认。 |
 | `exec.timeoutMs` | 派活默认的超时毫秒；0 或省略 = 不限时。 |

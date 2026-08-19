@@ -7,6 +7,10 @@
         # Board 快照的落盘位置。刻意没有默认值——一个 process.cwd() 回落
         # 会把用户数据散落在进程恰好启动的地方（见 ADR-0006）。
         boardPath: !!js dshHomePath('vela/board.json')
+        # 记忆库（复盘）的目录。与 boardPath 同款：代码里没有默认值，具体路径
+        # 在这里显式声明（ADR-0022）。**目录不会预先创建**：第一次有执行跑完
+        # 、真的要落一篇复盘时它才出现。不想要记忆功能就把这一行删掉。
+        memoryPath: !!js dshHomePath('vela/memory')
         # 小队落成 DSH agent preset 目录的地方（ADR-0016）。指向 DSH 默认的
         # 可写 preset 根，因此 DSH 原生的会话入口也能直接选到小队。
         squadRoot: !!js dshHomePath('.agent-presets')
