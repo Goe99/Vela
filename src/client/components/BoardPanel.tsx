@@ -13,12 +13,14 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { VelaInjected } from '../index.ts'
 import type { BoardView, SkillsView } from '../board-client.ts'
+import type { MemoryView } from '../../domain/okf-bundle.ts'
 import type { NavView } from '../../domain/nav.ts'
 import { searchIssues } from '../../domain/search.ts'
 import { BoardGrid } from './BoardGrid.tsx'
 import { IssueDrawer } from './IssueDrawer.tsx'
 import { PanelSidebar } from './PanelSidebar.tsx'
 import { SkillsPage } from './SkillsPage.tsx'
+import { MemoryPage } from './MemoryPage.tsx'
 import { SquadsPage } from './SquadsPage.tsx'
 
 /**
@@ -57,6 +59,10 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
   const [skillsView, setSkillsView] = useState<SkillsView | undefined>(undefined)
   const [skillsFailed, setSkillsFailed] = useState(false)
   const [skillsLoading, setSkillsLoading] = useState(false)
+  // 记忆页与技能页同款：数据不进看板视图，只在切到这一页时才拉。
+  const [memoryView, setMemoryView] = useState<MemoryView | undefined>(undefined)
+  const [memoryFailed, setMemoryFailed] = useState(false)
+  const [memoryLoading, setMemoryLoading] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -86,6 +92,30 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
     if (!isOpen || nav !== 'skills') return
     void refreshSkills()
   }, [isOpen, nav, refreshSkills])
+
+  const refreshMemory = useCallback(async () => {
+    setMemoryLoading(true)
+    try {
+      const next = await client.listMemory()
+      setMemoryFailed(next === undefined)
+      if (next !== undefined) setMemoryView(next)
+    } finally {
+      setMemoryLoading(false)
+    }
+  }, [client])
+
+  useEffect(() => {
+    if (!isOpen || nav !== 'memory') return
+    void refreshMemory()
+  }, [isOpen, nav, refreshMemory])
+
+  const removeRecap = useCallback(async (path: string) => {
+    const next = await client.removeRecap(path)
+    // 删除接口直接返回删完之后的清单；拿不到就退化成重拉一次。
+    if (next === undefined) { void refreshMemory(); return }
+    setMemoryView(next)
+    setMemoryFailed(false)
+  }, [client, refreshMemory])
 
   // 打开时轮询，关闭时停。in-flight guard 在 client 内，这里只管调度。
   useEffect(() => {
@@ -178,7 +208,7 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
       ...(notice === undefined
         ? []
         : [createElement('span', { key: 'notice', 'data-vela-notice': '' }, notice)]),
-      ...(nav === 'squads' || nav === 'skills'
+      ...(nav === 'squads' || nav === 'skills' || nav === 'memory'
         ? []
         : [createElement(
           'label',
@@ -195,7 +225,7 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
             ? [createElement('span', { key: 'hits', 'data-vela-search-hits': '' }, `${visible.length} 张`)]
             : []),
         )]),
-      ...(nav === 'squads' || nav === 'skills'
+      ...(nav === 'squads' || nav === 'skills' || nav === 'memory'
         ? []
         : [createElement(
           'label',
@@ -247,6 +277,14 @@ export function BoardPanel(props: BoardPanelProps): ReturnType<typeof createElem
             loading: skillsLoading,
             onRefresh: () => { void refreshSkills() },
           })
+          : nav === 'memory'
+            ? createElement(MemoryPage, {
+              ...(memoryView === undefined ? {} : { view: memoryView }),
+              failed: memoryFailed,
+              loading: memoryLoading,
+              onRefresh: () => { void refreshMemory() },
+              onRemove: (path: string) => { void removeRecap(path) },
+            })
         // 搜索无结果时不渲六条空泳道：那看起来像看板被清空了，而不是搜索没命中（票 11）。
         : searching && visible.length === 0
           ? createElement(

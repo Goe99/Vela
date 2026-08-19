@@ -22,6 +22,7 @@ import type { BoardGridProps } from '../../src/client/components/BoardGrid.tsx'
 import { EditIssueForm } from '../../src/client/components/EditIssueForm.tsx'
 import { PanelSidebar } from '../../src/client/components/PanelSidebar.tsx'
 import { SkillsPage, SkillDetailDialog } from '../../src/client/components/SkillsPage.tsx'
+import { MemoryPage, RecapDialog } from '../../src/client/components/MemoryPage.tsx'
 import { SquadsPage } from '../../src/client/components/SquadsPage.tsx'
 import { NAV_ITEMS } from '../../src/domain/nav.ts'
 import type { Squad } from '../../src/domain/squad.ts'
@@ -411,6 +412,149 @@ describe('SkillsPage', () => {
     })))
     assert.ok(html.includes('/asu'))
     assert.ok(!html.includes(skill.sourcePath), '卡上不该有完整路径')
+  })
+})
+
+describe('MemoryPage', () => {
+  const pageProps = (overrides: Record<string, unknown> = {}) => ({
+    failed: false,
+    loading: false,
+    onRefresh: () => undefined,
+    onRemove: () => undefined,
+    ...overrides,
+  })
+
+  const entry = {
+    path: 'runs/vela-1a2b3c4d/12-r1.md',
+    title: '给 ordering 补测试',
+    trust: 'human-reviewed' as const,
+    status: 'stable' as const,
+    stale: false,
+    usageCount: 2,
+    workspace: 'd:\\Code\\Vela',
+    issueNumber: 12,
+    generatedAt: '2026-08-17T09:00:00.000Z',
+    verifiedAt: '2026-08-17T10:00:00.000Z',
+    body: '## 结论\n\n跑通了',
+  }
+
+  it('还没拉到时显示「正在读」，不是空白', () => {
+    const html = renderToStaticMarkup(createElement(MemoryPage, pageProps()))
+    assert.ok(html.includes('正在读记忆库'))
+  })
+
+  it('拉取失败与「一篇都没有」分得开', () => {
+    const html = renderToStaticMarkup(createElement(MemoryPage, pageProps({ failed: true })))
+    assert.ok(html.includes('拉取失败'))
+    assert.ok(!html.includes('还没有复盘'))
+  })
+
+  it('没开启与「一篇都没有」也分得开，且告知怎么开', () => {
+    // 空列表看起来像「记忆不好使」，而实情可能是他没开（ADR-0022）。
+    const off = renderToStaticMarkup(createElement(MemoryPage, pageProps({
+      view: { available: false, entries: [], history: [] },
+    })))
+    assert.ok(off.includes('没开启'))
+    assert.ok(off.includes('memoryPath'), '要告知怎么开')
+    const empty = renderToStaticMarkup(createElement(MemoryPage, pageProps({
+      view: { available: true, entries: [], history: [] },
+    })))
+    assert.ok(empty.includes('还没有复盘'))
+    assert.ok(!empty.includes('memoryPath'))
+  })
+
+  it('按工作区分列，并数出几篇人审过', () => {
+    const html = renderToStaticMarkup(createElement(MemoryPage, pageProps({
+      view: {
+        available: true,
+        entries: [entry, { ...entry, path: 'b.md', title: '另一篇', trust: 'unverified', status: 'draft' }],
+        history: [],
+      },
+    })))
+    assert.ok(html.includes('d:\\Code\\Vela'.replace(/\\/g, '\\')), '列头要摆出工作区')
+    assert.ok(html.includes('1 篇人审过'))
+    assert.ok(html.includes('人审过'))
+    assert.ok(html.includes('未验证'))
+  })
+
+  it('废弃与陈旧都标出来，并整行调淡', () => {
+    const html = renderToStaticMarkup(createElement(MemoryPage, pageProps({
+      view: {
+        available: true,
+        entries: [{ ...entry, status: 'deprecated' }, { ...entry, path: 'c.md', stale: true }],
+        history: [],
+      },
+    })))
+    assert.ok(html.includes('已废弃'))
+    assert.ok(html.includes('已陈旧'))
+    assert.ok(html.includes('data-dim="true"'))
+  })
+
+  it('读不懂的那篇把原因摆出来，不是悄悄不列', () => {
+    const html = renderToStaticMarkup(createElement(MemoryPage, pageProps({
+      view: {
+        available: true,
+        entries: [{ ...entry, problem: '第 3 行：引号没闭合' }],
+        history: [],
+      },
+    })))
+    assert.ok(html.includes('第 3 行'))
+  })
+
+  it('卡上不摆完整路径与正文——那些收进弹窗', () => {
+    const html = renderToStaticMarkup(createElement(MemoryPage, pageProps({
+      view: { available: true, entries: [entry], history: [] },
+    })))
+    assert.ok(!html.includes(entry.path), '卡上不该有完整路径')
+    assert.ok(!html.includes('跑通了'), '卡上不该有正文')
+  })
+
+  it('更新历史收在可展开的块里', () => {
+    const html = renderToStaticMarkup(createElement(MemoryPage, pageProps({
+      view: { available: true, entries: [entry], history: ['09:00 落下一篇'] },
+    })))
+    assert.ok(html.includes('更新历史（1 条）'))
+    assert.ok(html.includes('09:00 落下一篇'))
+  })
+
+  it('页脚说清哪些会被带给 Agent', () => {
+    const html = renderToStaticMarkup(createElement(MemoryPage, pageProps({
+      view: { available: true, entries: [entry], history: [] },
+    })))
+    assert.ok(html.includes('人审过'))
+    assert.ok(html.includes('Markdown'), '要告知这些文件可以直接拿走')
+  })
+})
+
+describe('RecapDialog', () => {
+  const entry = {
+    path: 'runs/vela-1a2b3c4d/12-r1.md',
+    title: '给 ordering 补测试',
+    trust: 'unverified' as const,
+    status: 'draft' as const,
+    stale: false,
+    usageCount: 0,
+    body: '## 结论\n\n跑通了',
+  }
+
+  it('摆出全文、文件位置与删除入口', () => {
+    const html = renderToStaticMarkup(createElement(RecapDialog, {
+      entry,
+      onClose: () => undefined,
+      onRemove: () => undefined,
+    }))
+    assert.ok(html.includes('跑通了'))
+    assert.ok(html.includes(entry.path))
+    assert.ok(html.includes('删除'))
+  })
+
+  it('没人审过时不摆人审时间那一行', () => {
+    const html = renderToStaticMarkup(createElement(RecapDialog, {
+      entry,
+      onClose: () => undefined,
+      onRemove: () => undefined,
+    }))
+    assert.ok(!html.includes('人审</div>'))
   })
 })
 

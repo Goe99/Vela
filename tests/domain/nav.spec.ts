@@ -12,14 +12,16 @@ import {
 } from '../../src/domain/nav.ts'
 
 describe('导航归属表', () => {
-  it('恰好十二项，与 Multica 一致', () => {
-    assert.equal(NAV_ITEMS.length, 12)
+  it('十三项：Multica 的十二项加 Vela 自己的记忆页', () => {
+    // 破例记在 ADR-0024：记忆库在 DSH 里不存在，不属于「不重画 DSH 已有界面」
+    // 要防的情形；而一个 Operator 找不到入口的功能等于没做。
+    assert.equal(NAV_ITEMS.length, 13)
   })
 
   it('沿用 Multica 的键名与顺序，方便逐项对照', () => {
     assert.deepEqual(NAV_ITEMS.map(item => item.key), [
       'inbox', 'chat', 'myIssues',
-      'issues', 'projects', 'autopilots', 'agents', 'squads', 'usage',
+      'issues', 'projects', 'autopilots', 'agents', 'squads', 'memory', 'usage',
       'runtimes', 'skills', 'settings',
     ])
   })
@@ -72,9 +74,9 @@ describe('导航归属表', () => {
     assert.equal(badged[0]?.badge, 'attention')
   })
 
-  it('Vela 自己画的视图恰好是 Board、待你处理、小队、技能四处', () => {
+  it('Vela 自己画的视图恰好是 Board、待你处理、小队、技能、记忆五处', () => {
     const views = new Set(NAV_ITEMS.map(viewFor).filter(view => view !== undefined))
-    assert.deepEqual([...views].sort(), ['attention', 'board', 'skills', 'squads'])
+    assert.deepEqual([...views].sort(), ['attention', 'board', 'memory', 'skills', 'squads'])
   })
 
   it('聊天是「关掉自己的面板」而不是某种跳转——DSH 没有编程式切页', () => {

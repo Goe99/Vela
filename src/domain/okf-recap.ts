@@ -47,6 +47,9 @@ export const OPERATOR_ACTOR = `${HUMAN_ACTOR_PREFIX}operator`
  */
 export type TrustLevel = 'unverified' | 'machine-confirmed' | 'human-reviewed'
 
+/** 全部信任等级，由弱到强。校验外来数据时要用到它。 */
+export const TRUST_LEVELS: readonly TrustLevel[] = ['unverified', 'machine-confirmed', 'human-reviewed']
+
 /** 生命周期状态（OKF 的 `status`）。与信任等级正交，各管一件事。 */
 export type RecapStatus = 'draft' | 'stable' | 'deprecated'
 

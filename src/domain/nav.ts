@@ -29,7 +29,7 @@ export type NavAction =
   | { readonly kind: 'disabled'; readonly reason: 'not-yet' | 'no-such-page'; readonly note: string }
 
 /** Vela 自己画的视图。 */
-export type NavView = 'board' | 'attention' | 'squads' | 'skills'
+export type NavView = 'board' | 'attention' | 'squads' | 'skills' | 'memory'
 
 /** 可交给 DSH 打开的配置文件。 */
 export type DocumentTarget = 'settings' | 'agent-presets'
@@ -117,6 +117,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     group: 'workspace',
     label: '小队',
     action: { kind: 'view', view: 'squads' },
+  },
+  {
+    key: 'memory',
+    group: 'workspace',
+    label: '记忆',
+    // 第十三项：打破了「按 Multica 的十二项原样摆好」（ADR-0024）。破例的理由是
+    // 记忆库在 DSH 里根本不存在，不属于 ADR-0020 要防的「重画 DSH 已有界面」。
+    action: { kind: 'view', view: 'memory' },
   },
   {
     key: 'usage',

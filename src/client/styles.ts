@@ -1933,6 +1933,199 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   font-size: 11px;
   color: var(--vela-text-3);
 }
+
+/* ── 记忆页：一个工作区一列，形态与技能广场一致 ────────── */
+
+[data-vela-memory] {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 18px;
+  overflow: hidden;
+}
+
+[data-vela-memory] h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+[data-vela-recap-head] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex: 0 0 auto;
+}
+
+[data-vela-recap-head] h2 { flex: 1 1 auto; }
+
+[data-vela-recap-cols] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+}
+
+/* 一列 = 一个工作区。列数随工作区变，因此给一个最小宽并允许横向滚。 */
+[data-vela-recap-col] {
+  flex: 1 1 0;
+  min-width: 240px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--vela-line);
+  border-radius: 8px;
+  background: var(--vela-lane);
+  overflow: hidden;
+}
+
+[data-vela-recap-col-head] {
+  flex: 0 0 auto;
+  padding: 9px 11px 7px;
+  border-bottom: 1px solid var(--vela-line-soft);
+}
+
+[data-vela-recap-col-head] h3 {
+  margin: 0;
+  font-size: 12px;
+  color: var(--vela-text-2);
+  word-break: break-all;
+}
+
+[data-vela-recap-hint] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+  margin-top: 2px;
+}
+
+[data-vela-recap-col-body] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+[data-vela-recap-row] {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 9px;
+  margin-bottom: 7px;
+  border: 1px solid var(--vela-line-soft);
+  border-radius: 7px;
+  background: var(--vela-card);
+  box-shadow: var(--vela-card-shadow);
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+[data-vela-recap-row]:hover { border-color: var(--vela-line); }
+[data-vela-recap-row]:focus-visible {
+  outline: 2px solid var(--vela-accent);
+  outline-offset: 1px;
+}
+
+/* 废弃或陈旧的整行调淡：它还在目录里，但不会被带给 Agent。 */
+[data-vela-recap-row][data-dim='true'] { opacity: .55; }
+
+[data-vela-recap-main] {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+[data-vela-recap-title] {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+[data-vela-recap-when] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+}
+
+[data-vela-recap-problem] {
+  font-size: 12px;
+  color: var(--vela-warn);
+}
+
+[data-vela-recap-dialog-title] {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 14px;
+}
+
+[data-vela-recap-field] { margin-bottom: 12px; }
+
+[data-vela-recap-field-label] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+  margin-bottom: 3px;
+}
+
+[data-vela-recap-path] {
+  font-size: 11px;
+  color: var(--vela-text-3);
+  word-break: break-all;
+}
+
+/* 正文原样展示：它是 Markdown，不渲染成 HTML——这一页要让人看到
+   文件里到底写的是什么，而不是它渲染后好不好看。 */
+[data-vela-recap-body] {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--vela-line-soft);
+  border-radius: 6px;
+  background: var(--vela-lane);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+[data-vela-recap-confirm] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--vela-text-2);
+}
+
+[data-vela-recap-log] {
+  flex: 0 0 auto;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--vela-text-3);
+  max-height: 22vh;
+  overflow-y: auto;
+}
+
+[data-vela-recap-log] summary { cursor: pointer; }
+
+[data-vela-recap-log] ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+[data-vela-recap-footer] {
+  flex: 0 0 auto;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--vela-text-3);
+}
 `
 
 /**

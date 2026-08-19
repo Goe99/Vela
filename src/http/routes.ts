@@ -168,9 +168,13 @@ async function settleRecap(
     // 退回：什么都不动。它留在草稿，等重跑落新篇时被标废弃。
   } catch (error) {
     deps.logger?.warn(
-      `vela: 验收后回写复盘失败（${relative}）：${error instanceof Error ? error.message : String(error)}`,
+      `vela: 验收后回写复盘失败（${relative}）：${describeError(error)}`,
     )
   }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 const STATUS_BY_CODE: Readonly<Record<BoardErrorCode, number>> = {
@@ -441,6 +445,68 @@ export async function handleApi(
       return json(200, { ok: true, available: false, skills: [] })
     }
     return json(200, { ok: true, available: true, skills: await deps.skills.list() })
+  }
+
+  // GET /memory —— 记忆页：全部复盘（含读不懂的）与更新历史。
+  //
+  // 顺手做一次对账（ADR-0025 要求的第二处触发点）：上次验收改了快照却没
+  // 写成文件的，在这里补上。对账失败不影响列表——看不到记忆比看到一份没补齐
+  // 的记忆糟得多。
+  if (method === 'GET' && segments.length === 1 && segments[0] === 'memory') {
+    const memory = deps.memory
+    if (memory === undefined) {
+      return json(200, { ok: true, available: false, entries: [], history: [] })
+    }
+    const at = deps.now()
+    const pending = store.snapshot().issues
+      .filter(issue => issue.lane === 'done' && issue.runs.length > 0)
+      .map(issue => ({
+        workspace: issue.workspace,
+        issueNumber: issue.number,
+        runSeq: issue.runs.length,
+      }))
+    await memory.backfillVerified(pending, at).catch((error: unknown) => {
+      deps.logger?.warn(`vela: 打开记忆页时的对账失败：${describeError(error)}`)
+      return 0
+    })
+    try {
+      return json(200, {
+        ok: true,
+        available: true,
+        entries: await memory.browse(at),
+        history: await memory.history(),
+      })
+    } catch (error) {
+      return json(500, { ok: false, code: 'io', message: `读不了记忆库：${describeError(error)}` })
+    }
+  }
+
+  // POST /memory/remove —— 删一篇复盘。
+  //
+  // 路径进请求体而不是 URL 段：它带着斜杠（`runs/<工作区>/12-r1.md`），
+  // 塞进路径段要编码两次，而那是一类经典的目录穿越源头。
+  if (method === 'POST' && segments.length === 2 && segments[0] === 'memory' && segments[1] === 'remove') {
+    const memory = deps.memory
+    if (memory === undefined) {
+      return json(409, { ok: false, code: 'conflict', message: '这个部署没开记忆库' })
+    }
+    const body = asRecord(request.body)
+    const path = optionalString(body?.path)
+    if (path === undefined) {
+      return json(400, { ok: false, code: 'invalid', message: 'path is required' })
+    }
+    try {
+      const removed = await memory.remove(path, deps.now())
+      if (!removed) return json(404, { ok: false, code: 'not-found', message: `没有这篇：${path}` })
+    } catch (error) {
+      return json(400, { ok: false, code: 'invalid', message: describeError(error) })
+    }
+    return json(200, {
+      ok: true,
+      available: true,
+      entries: await memory.browse(deps.now()),
+      history: await memory.history(),
+    })
   }
 
   // ---- 小队（ADR-0016）----

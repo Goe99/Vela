@@ -37,6 +37,47 @@ export interface BundleGroup {
   readonly entries: readonly BundleEntry[]
 }
 
+/**
+ * 记忆页要的一条。
+ *
+ * 与 {@link BundleEntry} 分开：后者是写索引用的最小集，这一份要给界面，
+ * 因此带上正文与引用计数。**必须能 JSON 序列化**（它要过 HTTP），所以
+ * 不带 frontmatter 那个 Map。
+ *
+ * 读不懂的文件也占一条：`problem` 有值时其余字段是占位，界面把它显示成
+ * 「这篇读不了」而不是从列表里消失（ADR-0023）。
+ */
+export interface MemoryEntryView {
+  readonly path: string
+  readonly title: string
+  readonly trust: TrustLevel
+  readonly status: RecapStatus
+  readonly stale: boolean
+  readonly usageCount: number
+  readonly workspace?: string
+  readonly issueNumber?: number
+  readonly generatedAt?: string
+  readonly verifiedAt?: string
+  /** 正文全文，给详情弹窗用。 */
+  readonly body: string
+  /** 读不懂的原因。 */
+  readonly problem?: string
+}
+
+/** 记忆页拿到的整份视图。 */
+export interface MemoryView {
+  /**
+   * 记忆库开着吗。
+   *
+   * 假表示**没配 `memoryPath`**，与「配了但一篇都没有」是两件事：空列表看
+   * 起来像「还没有记忆」，而实情是「这个功能根本没开」（ADR-0022）。
+   */
+  readonly available: boolean
+  readonly entries: readonly MemoryEntryView[]
+  /** 更新历史，最新的在前。 */
+  readonly history: readonly string[]
+}
+
 /** 信任等级的一眼可读标记。文字而非图标：索引也会被 Agent 读到。 */
 export function trustMark(trust: TrustLevel): string {
   switch (trust) {

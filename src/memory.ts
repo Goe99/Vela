@@ -24,7 +24,7 @@ import {
   OPERATOR_ACTOR, buildRecap, bumpUsageCount, isStale, markDeprecated, markVerified,
   readRecap, recapRelativePath, workspaceSlug,
 } from './domain/okf-recap.ts'
-import type { BundleEntry, BundleGroup } from './domain/okf-bundle.ts'
+import type { BundleEntry, BundleGroup, MemoryEntryView } from './domain/okf-bundle.ts'
 import type { RecallCandidate } from './domain/okf-recall.ts'
 import {
   appendLogEntry, buildRootIndex, buildWorkspaceIndex, logPath, loggedDeprecated, loggedLanded,
@@ -79,6 +79,17 @@ export interface MemoryGateway {
   verify(relative: string, at: number): Promise<boolean>
   /** 标废弃。 */
   deprecate(relative: string, why: string, at: number): Promise<boolean>
+  /** 记忆页要的全部条目，含读不懂的那些。 */
+  browse(now: number): Promise<readonly MemoryEntryView[]>
+  /** 删一篇。返回假表示那篇文件不在。 */
+  remove(relative: string, at: number): Promise<boolean>
+  /** 更新历史，最新的在前。 */
+  history(): Promise<readonly string[]>
+  /** 对账：把漏写的人审记录补上（ADR-0025）。 */
+  backfillVerified(
+    candidates: readonly Pick<RunFacts, 'workspace' | 'issueNumber' | 'runSeq'>[],
+    at: number,
+  ): Promise<number>
 }
 
 /**
@@ -135,6 +146,11 @@ export class MemoryStore implements MemoryWriter, MemoryGateway, MemoryPort {
   }
 
   private absolute(relative: string): string {
+    // 拒绝跳出记忆库的路径。删除与读取的相对路径最终来自 HTTP 请求，
+    // 而一个 `../../` 就能把这个接口变成任意文件删除。
+    if (relative.length === 0 || isAbsolute(relative) || relative.split(/[\\/]/).includes('..')) {
+      throw new MemoryError(`不是记忆库里的相对路径：${relative}`)
+    }
     return join(this.root, relative)
   }
 
@@ -433,6 +449,45 @@ export class MemoryStore implements MemoryWriter, MemoryGateway, MemoryPort {
       })
     }
     return found
+  }
+
+  /**
+   * 记忆页要的全部条目，新的在前。
+   *
+   * 读不懂的文件**照样占一条**，带着原因（ADR-0023）：从列表里静默跳过等于
+   * 告诉 Operator「那篇不存在」，而它就在目录里。
+   */
+  async browse(now: number): Promise<readonly MemoryEntryView[]> {
+    const stored = await this.list()
+    const views = stored.map((item): MemoryEntryView => {
+      const recap = item.recap
+      if (recap === undefined) {
+        return {
+          path: item.path,
+          title: item.path,
+          trust: 'unverified',
+          status: 'draft',
+          stale: false,
+          usageCount: 0,
+          body: '',
+          problem: item.problem ?? '这篇读不了',
+        }
+      }
+      return {
+        path: item.path,
+        title: recap.title.length === 0 ? item.path : recap.title,
+        trust: recap.trust,
+        status: recap.status,
+        stale: isStale(recap.staleAfter, now),
+        usageCount: recap.usageCount,
+        body: recap.body,
+        ...(recap.workspace === undefined ? {} : { workspace: recap.workspace }),
+        ...(recap.issueNumber === undefined ? {} : { issueNumber: recap.issueNumber }),
+        ...(recap.generatedAt === undefined ? {} : { generatedAt: recap.generatedAt }),
+        ...(recap.verifiedAt === undefined ? {} : { verifiedAt: recap.verifiedAt }),
+      }
+    })
+    return views.sort((left, right) => (right.generatedAt ?? '').localeCompare(left.generatedAt ?? ''))
   }
 }
 

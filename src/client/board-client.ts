@@ -13,6 +13,8 @@ import type { Squad } from '../domain/squad.ts'
 import type { MemberSpan } from '../domain/timeline.ts'
 import type { ModelOption } from '../domain/models.ts'
 import type { DocumentTarget } from '../domain/nav.ts'
+import type { MemoryEntryView, MemoryView } from '../domain/okf-bundle.ts'
+import { RECAP_STATUSES, TRUST_LEVELS } from '../domain/okf-recap.ts'
 import type { InstalledSkill } from '../domain/skills.ts'
 import { SKILL_SOURCES } from '../domain/skills.ts'
 
@@ -74,6 +76,46 @@ export type SquadShape = Squad & { readonly resolvedInstruction?: string }
 export interface SkillsView {
   readonly available: boolean
   readonly skills: readonly InstalledSkill[]
+}
+
+/**
+ * 从未经校验的响应体里读出记忆清单。逐条校验，形状不齐的丢掉；
+ * 不认识的信任等级与状态归为最保守的那一档（未验证 / 草稿）——
+ * 宁可低估信任，不可把看不懂的东西显示成「人审过」。
+ */
+function readMemory(body: unknown): MemoryView | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const raw = body as Record<string, unknown>
+  if (!Array.isArray(raw.entries)) return undefined
+  const entries: MemoryEntryView[] = []
+  for (const candidate of raw.entries) {
+    if (typeof candidate !== 'object' || candidate === null) continue
+    const item = candidate as Record<string, unknown>
+    if (typeof item.path !== 'string') continue
+    entries.push({
+      path: item.path,
+      title: typeof item.title === 'string' ? item.title : item.path,
+      trust: (TRUST_LEVELS as readonly string[]).includes(item.trust as string)
+        ? item.trust as MemoryEntryView['trust']
+        : 'unverified',
+      status: (RECAP_STATUSES as readonly string[]).includes(item.status as string)
+        ? item.status as MemoryEntryView['status']
+        : 'draft',
+      stale: item.stale === true,
+      usageCount: typeof item.usageCount === 'number' ? item.usageCount : 0,
+      body: typeof item.body === 'string' ? item.body : '',
+      ...(typeof item.workspace === 'string' ? { workspace: item.workspace } : {}),
+      ...(typeof item.issueNumber === 'number' ? { issueNumber: item.issueNumber } : {}),
+      ...(typeof item.generatedAt === 'string' ? { generatedAt: item.generatedAt } : {}),
+      ...(typeof item.verifiedAt === 'string' ? { verifiedAt: item.verifiedAt } : {}),
+      ...(typeof item.problem === 'string' ? { problem: item.problem } : {}),
+    })
+  }
+  return {
+    available: raw.available === true,
+    entries,
+    history: Array.isArray(raw.history) ? raw.history.filter((line): line is string => typeof line === 'string') : [],
+  }
 }
 
 /** 一次写操作的结果。 */
@@ -327,6 +369,45 @@ export class BoardClient {
       })
       if (!response.ok) return undefined
       return readSkills(await response.json())
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 记忆页：全部复盘与更新历史。
+   *
+   * 与技能广场同款，不走 refresh/write 链：它与 Board 快照无关，失败也不该动
+   * 看板那份「最后一次成功视图」。返回 undefined = 拉取失败，界面显示「拉取失败」
+   * 而不是「一篇记忆都没有」。
+   */
+  async listMemory(): Promise<MemoryView | undefined> {
+    try {
+      const response = await this.fetch(`${API_PREFIX}/memory`, {
+        method: 'GET',
+        headers: { 'cache-control': 'no-store' },
+      })
+      if (!response.ok) return undefined
+      return readMemory(await response.json())
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 删一篇复盘。成功时直接拿回删完之后的清单，省一次往返。
+   *
+   * 路径进请求体：它带着斜杠，塞进 URL 路径段要编码两次。
+   */
+  async removeRecap(path: string): Promise<MemoryView | undefined> {
+    try {
+      const response = await this.fetch(`${API_PREFIX}/memory/remove`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path }),
+      })
+      if (!response.ok) return undefined
+      return readMemory(await response.json())
     } catch {
       return undefined
     }

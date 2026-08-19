@@ -596,6 +596,10 @@ describe('验收同时裁定复盘可不可信', () => {
     const broken: MemoryGateway = {
       verify: async () => { throw new Error('盘坏了') },
       deprecate: async () => true,
+      browse: async () => [],
+      remove: async () => true,
+      history: async () => [],
+      backfillVerified: async () => 0,
     }
     const response = await handleApi(harness.store, {
       ...apiDeps(broken),
@@ -671,6 +675,125 @@ describe('对账补写人审记录', () => {
   it('文件根本不在时安静跳过', async () => {
     const memory = MemoryStore.open(join(dir, 'mem'))
     assert.equal(await memory.backfillVerified([{ workspace: '/x', issueNumber: 1, runSeq: 1 }], AT), 0)
+  })
+})
+
+describe('记忆页的接口', () => {
+  /** 发一次请求。 */
+  async function call(
+    store: BoardStore,
+    memory: MemoryStore | undefined,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const deps: ApiDeps = {
+      now: () => AT + 60_000,
+      newId: () => 'x',
+      sandboxPresets: () => [],
+      platform: () => 'win32',
+      ...(memory === undefined ? {} : { memory }),
+    }
+    const response = await handleApi(store, deps, {
+      method,
+      path: `${API_PREFIX}${path}`,
+      ...(body === undefined ? {} : { body }),
+    })
+    return { status: response.status, body: response.body as Record<string, unknown> }
+  }
+
+  it('没配记忆库时明确说「没开启」，而不是给一个空列表', async () => {
+    // 空列表看起来像「还没有记忆」，而实情是「这个功能根本没开」（ADR-0022）。
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const result = await call(store, undefined, 'GET', '/memory')
+    assert.equal(result.status, 200)
+    assert.equal(result.body.available, false)
+  })
+
+  it('列出全部复盘与更新历史', async () => {
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    await memory.landRecap(facts(), { conclusion: '跑通了', did: '', pitfalls: '' }, AT)
+    const result = await call(store, memory, 'GET', '/memory')
+    assert.equal(result.body.available, true)
+    const entries = result.body.entries as readonly Record<string, unknown>[]
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0]!.trust, 'unverified')
+    assert.equal(entries[0]!.workspace, '/repo')
+    assert.ok((result.body.history as readonly string[]).length > 0)
+  })
+
+  it('读不懂的文件照样列出并带上原因', async () => {
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    await memory.landRecap(facts(), undefined, AT)
+    await mkdir(join(dir, 'mem', 'runs', 'broken-00000000'), { recursive: true })
+    await writeFile(join(dir, 'mem', 'runs', 'broken-00000000', '9-r1.md'), '不是 OKF\n', 'utf8')
+    const result = await call(store, memory, 'GET', '/memory')
+    const entries = result.body.entries as readonly Record<string, unknown>[]
+    assert.equal(entries.length, 2)
+    assert.ok(entries.some(entry => typeof entry.problem === 'string'), '坏文件要带着原因出现')
+  })
+
+  it('打开记忆页时顺手对账：卡在 Done 而那篇仍是草稿就补上', async () => {
+    // ADR-0025 要求的第二处对账触发点。
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const issue = await card(store)
+    await memory.landRecap(facts({ issueNumber: issue.number }), undefined, AT)
+    // 把卡搬到 Done，并给它一条已结算的执行。
+    await store.mutate((board) => {
+      const issues = board.issues.map(candidate => (candidate.id === issue.id
+        ? {
+          ...candidate,
+          lane: 'done' as const,
+          runs: [{ id: 'r1', sessionId: 'ses1', startedAt: AT, status: 'settled' as const, outcome: 'completed' as const }],
+        }
+        : candidate))
+      return { board: { ...board, issues }, value: undefined }
+    })
+    const result = await call(store, memory, 'GET', '/memory')
+    const entries = result.body.entries as readonly Record<string, unknown>[]
+    assert.equal(entries[0]!.trust, 'human-reviewed')
+  })
+
+  it('删一篇：直接拿回删完之后的清单', async () => {
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const path = await memory.landRecap(facts(), undefined, AT)
+    const result = await call(store, memory, 'POST', '/memory/remove', { path })
+    assert.equal(result.status, 200)
+    assert.deepEqual(result.body.entries, [])
+    assert.equal(await memory.readFileAt(path), undefined)
+  })
+
+  it('删不存在的那篇给 404', async () => {
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    const result = await call(store, memory, 'POST', '/memory/remove', { path: 'runs/x/9-r1.md' })
+    assert.equal(result.status, 404)
+  })
+
+  it('想跳出记忆库的路径被拒', async () => {
+    // 这个接口收的是一条相对路径，一个 `../../` 就能把它变成任意文件删除。
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    await memory.landRecap(facts(), undefined, AT)
+    const result = await call(store, memory, 'POST', '/memory/remove', { path: '../../board.json' })
+    assert.equal(result.status, 400)
+    assert.ok(await memory.readFileAt('index.md') !== undefined, '记忆库本身不应被动')
+  })
+
+  it('没配记忆库时删除给 409', async () => {
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const result = await call(store, undefined, 'POST', '/memory/remove', { path: 'runs/x/1-r1.md' })
+    assert.equal(result.status, 409)
+  })
+
+  it('没传 path 给 400', async () => {
+    const store = await BoardStore.open(join(dir, 'board.json'))
+    const memory = MemoryStore.open(join(dir, 'mem'))
+    assert.equal((await call(store, memory, 'POST', '/memory/remove', {})).status, 400)
   })
 })
 
