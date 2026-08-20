@@ -8,7 +8,8 @@ Thumbs.db
 # 步骤，构建产物必须随仓库提交（与 dsh-hub 同约定）。改动源码后用
 # `pnpm build` 重新产出并一并提交。
 
-# .scratch/ 是 issue tracker，受版本管理，不要在此忽略。
+# .scratch/ 与 docs/ 为本地工作文档，不纳入版本管理。
+.scratch/
 
 # 本地 dsh 安装验证用的临时 profile
 .dsh-scratch/
