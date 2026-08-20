@@ -1,11 +1,16 @@
 node_modules/
-lib/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
 *.log
 
+# lib/ 刻意不忽略：GitHub 安装是 clone + `dsh plugin add`，没有 prepare 构建
+# 步骤，构建产物必须随仓库提交（与 dsh-hub 同约定）。改动源码后用
+# `pnpm build` 重新产出并一并提交。
+
 # .scratch/ 是 issue tracker，受版本管理，不要在此忽略。
 
-# ���� dsh ��װ��֤�õ���ʱ profile
+# 本地 dsh 安装验证用的临时 profile
 .dsh-scratch/
+
+/docs
