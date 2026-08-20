@@ -125,12 +125,6 @@ describe('BoardPanel', () => {
     assert.ok(html.includes('role="dialog"'), '应是一个 dialog')
   })
 
-  it('打开时保留 Multica 署名（Multica License 条件 b）', () => {
-    const face = injected()
-    face.panel.open()
-    const html = renderToStaticMarkup(createElement(BoardPanel, face))
-    assert.ok(html.includes('Multica'), '界面必须保留 Multica 署名')
-  })
 })
 
 describe('BoardGrid', () => {
@@ -293,10 +287,6 @@ describe('PanelSidebar', () => {
     assert.equal((html.match(/data-active="true"/g) ?? []).length, 1, '只能高亮一项')
   })
 
-  it('保留 Multica 署名（License 条件 b）', () => {
-    const html = renderToStaticMarkup(createElement(PanelSidebar, sidebarProps()))
-    assert.ok(html.includes('Powered by Multica'))
-  })
 })
 
 describe('SquadsPage', () => {

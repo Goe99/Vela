@@ -1049,13 +1049,6 @@ body[data-ds-dark-theme] [data-vela-extract-open] {
   text-align: center;
 }
 
-[data-vela-nav-brand] {
-  margin-top: auto;
-  padding: 6px 8px;
-  font-size: 10px;
-  color: var(--vela-text-3);
-}
-
 [data-vela-notice] {
   padding: 3px 8px;
   border-radius: 5px;

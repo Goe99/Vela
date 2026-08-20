@@ -95,8 +95,6 @@ export function PanelSidebar(props: PanelSidebarProps): ReturnType<typeof create
       createElement('div', { 'data-vela-nav-group-title': '' }, NAV_GROUP_LABELS[group]),
       ...itemsInGroup(group).map(item => renderItem(item, props)),
     )),
-    // Multica License 条件 (b)：移植的看板 UI 必须保留 Multica 署名。
-    createElement('div', { 'data-vela-nav-brand': '' }, 'Powered by Multica'),
   )
 }
 

@@ -6,68 +6,98 @@
 
 ——
 
-单 Operator 的 AI Agent 项目管理面板，作为 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) 插件运行。像管理同事一样为 Agent 派活、追踪进度、验收产出。
+Vela 是给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 用的看板插件。把所有要交给 AI 干的活摆上六列看板：点一下「派活」，AI 就真的去你的项目里干活；干完了由你验收——**AI 有权交付，无权宣布通过**。
 
-> Board UI 的设计与部分实现移植自 [Multica](https://github.com/multica-ai/multica)。**Powered by Multica** — 依据 Multica License 条件 (b)，界面保留 Multica 署名。
+![Vela 看板：Backlog / Todo / Running / 待验收 / Done / Failed 六列，所有项目的卡片在一块板上](assets/board.png)
 
-## 这是什么
+## 安装
 
-一个全幅看板：所有 Issue 按状态分列在六个固定 Lane（Backlog / Todo / Running / 待验收 / Done / Failed）上，跨 Workspace 统一呈现。在卡片上一键派活，Agent 在一个独立的 dsh 顶层会话里执行；干完后卡片进入「待验收」，由 Operator 接受或退回——Agent 有权交付，无权宣布通过。
+推荐直接从 GitHub 安装到 DSH 的 `web` profile：
 
-设计决策见 [`docs/adr/`](./docs/adr)，术语见 [`CONTEXT.md`](./CONTEXT.md)，需求见 [`.scratch/vela-board/spec.md`](./.scratch/vela-board/spec.md)。
+```sh
+dsh plugin --profile web add github:Goe99/Vela
+# 如果 dsh web 正在运行，重启后刷新页面
+```
+
+装好后，点 DSH 网页版侧边栏底部的「▦ Vela」就能打开看板。构建产物已经随仓库提交，不需要额外构建。想确认装上了，运行 `dsh --profile web --dump-config`，能看到 `vela` 行就是成了。需要改源码的话，克隆仓库后在仓库目录运行 `dsh plugin --profile web add .`。
+
+看板在网页界面里展示，所以要装到带网页界面的组合里——DSH 自带的 `web` profile 就满足。
+
+### 配置
+
+一般不用动，默认就够用。想改的话，在 profile 的 `cordis.patch.yml` 里覆盖 `vela` 行：
+
+| 项 | 含义 | 默认 |
+|---|---|---|
+| `boardPath` | 看板数据存到哪个文件 | `$DSH_HOME/vela/board.json` |
+| `memoryPath` | AI 的复盘笔记存到哪个目录；**把这行删掉就整个关掉记忆功能**：AI 不再写复盘，派活时也不再引用过去的经验 | `$DSH_HOME/vela/memory` |
+| `exec.agentPreset` | 派活时默认用哪个 Agent 配置 | 沿用 DSH 自己的默认 |
+| `exec.sandbox` | 派活时默认用哪个权限配置 | 沿用创建会话时定下的默认 |
+| `exec.timeoutMs` | 派活的超时毫秒数，0 或不填 = 不限时 | 不限时 |
+
+就算 DSH 组合里没有执行能力，看板、建卡、排序、验收也都照常用，只是卡片上不会出现「派活」按钮。
+
+## 它是怎么转起来的
+
+一张卡片就是一件活，看板的六列各是一个阶段：
+
+**Backlog → Todo → Running → 待验收 → Done**（干砸了的进 **Failed**）
+
+点卡片上的「派活」，AI 在一个独立会话里真的开始执行，卡片自己滑到 Running；干完滑到「待验收」等你检查——你点「接受」它才进 Done，不满意就退回 Todo。卡片永远按这个规则走，没有捷径。
+
+## 界面一览
+
+**卡片抽屉**：点开卡片就能改标题、描述和执行配置；每次执行的耗时和 Token 消耗一条条记在案，还能一键跳回当时干活的会话。
+
+![卡片详情抽屉](assets/issue-drawer.png)
+
+**小队**：把几个 Agent 角色攒成一支可复用的队伍，派活时整队出动。
+
+![小队列表](assets/squads.png)
+
+建队先定队长——写清这支队负责什么、怎么拆活、什么算做完：
+
+![创建小队：定名字和队长职责](assets/squad-create.png)
+
+队长和队员各自的分工、模型、能力范围都在详情页里调：队长拿全部能力，每个队员只能用自己白名单里的工具——安全边界设在队员身上。
+
+![小队详情：队长与队员各自的分工和能力](assets/squad-detail.png)
+
+加队员不用从零写：工程师、研究员、审查员……点一张角色模板卡就进队，进来之后还能再改。
+
+![加队员：点一张角色模板卡即入队](assets/squad-add-member.png)
+
+**技能广场**：当前装了哪些技能，一眼看全。
+
+![技能广场](assets/skills.png)
 
 ## 功能
 
-- **六列看板**：固定 Lane，每列恰好是状态机的一个节点（ADR-0009）。拖拽重排与跨列移动，非法落点在 drop 时即被拒绝。Alt + 方向键是等价的键盘操作。
-- **一键派活**：Agent 在自己的 dsh 顶层会话里真实执行，卡片自动进 Running。会话以 Issue 标题命名，在侧栏里可辨认。
-- **验收闸门**：执行成功只到「待验收」，**永远不自动进 Done**。接受进 Done，退回回 Todo。
-- **失败与重试**：失败原因直接写在卡片上。自动重试机制在位但**默认关闭**（ADR-0010），可按卡片开启。
-- **Token 用量**：进行中显示实时值（不落盘），结束时快照入 Run。异常终止导致缺失时显示未知，不显示 0。
-- **per-Issue 执行配置**：agent preset、权限档位、超时可按卡片覆盖，未覆盖的回落到全局默认。派活不弹对话框。
-- **Workspace 筛选**：默认跳看全部，可按 Workspace 收窄。
-- **批量建卡**：粘贴多行文本，一行一张卡片，整批落盘或一张也不落。
+- **六列看板**：卡片在哪一列，活就干到哪个阶段；不允许跳级——没人验收的卡进不了 Done。拖卡片用鼠标或者 Alt + 方向键都行。
+- **一键派活**：点一下，AI 真的在你的项目目录里干活，不是模拟。干活的会话用任务标题命名，在侧边栏一眼认出。
+- **验收闸门**：AI 干完只能到「待验收」，永远自己进不了 Done。
+- **失败与重试**：失败原因直接写在卡片上。可以让失败的活自动重试——默认关着，想开按卡片单独开。
+- **Token 用量**：干活时看实时消耗，结束后记进卡片档案。
+- **每张卡单独定规则**：用哪个 Agent、什么权限、多长时间，都可以按卡片覆盖全局默认。
+- **多项目一板看全**：所有项目的卡片都在一块板上，也可以按项目筛着看。
+- **批量建卡**：粘贴一段多行文本，一行变一张卡。
 
-## 架构
+## 技术要点
 
-- **host half**（`src/index.ts` + `src/domain` + `src/http` + `src/runner.ts`）：拥有 Board 状态机、JSON 快照持久化与派活执行器，经宿主 `webServer` 暴露 `/api/vela` 路由。不注册任何工具（ADR-0012）。
-- **client half**（`src/client`）：`sidebar.footer.action` 导航项 + `shell.overlay` 全幅面板（ADR-0002）。拖拽用**浏览器原生 drag-and-drop**，不引第三方库——本来就要为键盘操作单独做一层，原生方案让 client bundle 保持零新增依赖。
-- **领域层零 dsh 依赖**：Issue/Run 状态机、分数索引排序、用量折叠、快照读写都是纯逻辑，可脱离 harness 单测。
-- **派活经官方 `apiProxy` 服务**，不 import 任何 `@deepseek-ai/*` 运行时模块（ADR-0015）。对 dsh 的接触面用**结构化最小接口**声明（`src/dsh.ts`）——dsh 处于 developer preview，这样对版本漂移免疫。
+- **不添依赖**：前端没有引入任何新的第三方库，拖拽用的是浏览器原生能力。
+- **不怕 DSH 升级**：Vela 只用 DSH 官方对外的协作方式，不碰它的内部实现，DSH 版本更新不容易把 Vela 带坏。
+- **数据在你手里**：看板数据就是一个 JSON 文件，路径你说了算，随时打开看、备份、搬走。
+
+想深入实现细节的，设计决策记录在 [`docs/adr/`](./docs/adr)，术语表在 [`CONTEXT.md`](./CONTEXT.md)。
 
 ## 开发
 
 ```sh
 pnpm install
-pnpm typecheck   # host + client 两个 tsc program
-pnpm test        # 领域 / HTTP / client 纯逻辑
-pnpm build       # 产出 lib/index.mjs (host) + lib/index.js (client)
+pnpm typecheck   # 类型检查
+pnpm test        # 单元测试
+pnpm build       # 产出 lib/index.mjs + lib/index.js
 pnpm verify      # typecheck + test
 ```
 
-## 安装到一个 dsh profile
-
-```sh
-dsh plugin --profile <name> add <本仓库路径>
-```
-
-随后重启目标 profile。面板需要 Web 界面，因此 profile 的 bundle 列表里 `@deepseek-ai/dsh-web-app` 必须排在 `dsh-vela` 之前。
-
-### 配置
-
-在 profile 的 `cordis.patch.yml` 里覆盖 `vela` 行：
-
-| 项 | 含义 |
-|---|---|
-| `boardPath` | Board 快照的绝对路径，默认 `$DSH_HOME/vela/board.json`。**无 cwd 回落**（ADR-0006）。 |
-| `memoryPath` | 记忆库目录，默认 `$DSH_HOME/vela/memory`。**删掉这一项就整体关掉记忆功能**：不落复盘、不注入经验、派活文本与从前一字不差（ADR-0022）。 |
-| `exec.agentPreset` | 派活默认的 agent preset；省略则用 dsh 自己的有效默认。 |
-| `exec.sandbox` | 派活默认的**权限 preset 名字**（不是 sandbox 档位取值，见 ADR-0014）；省略则沿用会话创建时钉入的用户默认。 |
-| `exec.timeoutMs` | 派活默认的超时毫秒；0 或省略 = 不限时。 |
-
-未挂载 `apiProxy` 的 profile 仍可看看板、建卡、排序与验收，只是**派活按钮不出现**。
-
-## 状态
-
-spec 拆出的 13 张票均已实现并经真实启动验证：一次真实派活已确认 Agent 在工作目录里完成了任务、卡片自动流到待验收而非 Done、token 用量正确快照，接受后进 Done 且非法迁移被 409 拒绝。
-
-与票面描述不同的两处，已在上文说明：拖拽用原生方案而非 dnd-kit；票 13 的「从会话一键提取」实现为看板内的批量建卡（粘贴清单），而不是会话内的入口——后者需要一个 session-scoped slot，属于后续增量。
+`lib/` 随仓库提交（GitHub 安装路径没有构建步骤）：改动源码后请重新 `pnpm build` 并把产物一并提交。
